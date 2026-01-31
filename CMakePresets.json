@@ -1,0 +1,48 @@
+{
+    "version": 10,
+    "cmakeMinimumRequired": {
+        "major": 4,
+        "minor": 1,
+        "patch": 1
+    },
+    "configurePresets": [
+        {
+            "name": "common-ninja",
+            "hidden": true,
+            "displayName": "Common-Ninja",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/build/ninja",
+            "cacheVariables": {
+                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+            }
+        },
+        {
+            "name": "llvm-ninja",
+            "displayName": "LLVM - Ninja",
+            "description": "Build for LLVM",
+            "inherits": "common-ninja",
+            "toolchainFile": "${sourceDir}/cmake/llvm-toolchain.cmake"
+        },
+        {
+            "name": "windows",
+            "displayName": "Windows",
+            "description": "Build for Windows",
+            "generator": "Visual Studio 18 2026",
+            "binaryDir": "${sourceDir}/build/windows",
+            "toolchainFile": "${sourceDir}/cmake/msvc-toolchain.cmake",
+            "cacheVariables": {
+                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "llvm",
+            "configurePreset": "llvm-ninja"
+        },
+        {
+            "name": "windows",
+            "configurePreset": "windows"
+        }
+    ]
+}
