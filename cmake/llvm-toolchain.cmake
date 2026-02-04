@@ -12,5 +12,3 @@ endif()
 if(WIN32)
   set(CMAKE_SYSTEM_LIBRARY_PATH "$ENV{ProgramFiles}/LLVM/lib")
 endif()
-
-include($ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake)
