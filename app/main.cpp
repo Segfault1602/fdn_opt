@@ -53,7 +53,7 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order)
         initial_fdn_config.delays = sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Random, 42);
     }
 
-    initial_fdn_config.matrix_info = sfFDN::GenerateMatrix(fdn_order, sfFDN::ScalarMatrixType::Random, 42);
+    initial_fdn_config.matrix_info = sfFDN::GenerateMatrix(fdn_order, sfFDN::ScalarMatrixType::Householder, 42);
     return initial_fdn_config;
 }
 
@@ -88,7 +88,8 @@ fdn_optimization::OptimizationResult DoOptimization(quill::Logger* logger, fdn_o
 
 fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                        const sfFDN::FDNConfig& initial_fdn_config,
-                                                       const fdn_optimization::OptimizationAlgoParams& optimizer_params)
+                                                       const fdn_optimization::OptimizationAlgoParams& optimizer_params,
+                                                       const std::tuple<double, double, double>& loss_weights)
 {
 
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::Gains,
@@ -99,6 +100,9 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                 .ir_size = kSampleRate,
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
                                                 .gradient_delta = 1e-4,
+                                                .spectral_flatness_weight = std::get<0>(loss_weights),
+                                                .sparsity_weight = std::get<1>(loss_weights),
+                                                .power_envelope_weight = std::get<2>(loss_weights),
                                                 .target_rir = {},
                                                 .optimizer_params = optimizer_params};
 
@@ -196,6 +200,15 @@ int main(int argc, char** argv)
     bool colorless_only = false;
     app.add_flag("-c,--colorless_only", colorless_only, "Only perform colorless optimization");
 
+    double spectral_flatness_weight = 1.0;
+    app.add_option("--spectral_flatness_weight", spectral_flatness_weight, "Weight for spectral flatness loss term")
+        ->default_val(1.0);
+    double sparsity_weight = 1.0;
+    app.add_option("--sparsity_weight", sparsity_weight, "Weight for sparsity loss term")->default_val(1.0);
+    double power_envelope_weight = 1.0;
+    app.add_option("--power_envelope_weight", power_envelope_weight, "Weight for power envelope loss term")
+        ->default_val(1.0);
+
     std::string output_dir = "optim_output";
     app.add_option("-o,--output_dir", output_dir, "Output directory for optimization results    ")
         ->capture_default_str();
@@ -234,15 +247,19 @@ int main(int argc, char** argv)
 
     fdn_optimization::OptimizationAlgoParams optimizer_params = adam_params;
 
+    std::string selected_optimizer;
+
     if (app.got_subcommand("adam"))
     {
         LOG_INFO(logger, "Using Adam optimization algorithm.");
         optimizer_params = adam_params;
+        selected_optimizer = "adam";
     }
     else if (app.got_subcommand("lbfgs"))
     {
         LOG_INFO(logger, "Using L-BFGS optimization algorithm.");
         optimizer_params = lbfgs_params;
+        selected_optimizer = "lbfgs";
     }
 
     std::vector<float> target_rir;
@@ -264,13 +281,16 @@ int main(int argc, char** argv)
     std::string timestamp = std::format("{:%Y%m%d_%H%M%S}", local_now);
     LOG_INFO(logger, "Optimization timestamp: {}", timestamp);
 
+    std::string out_dir = timestamp + "_" + selected_optimizer;
+
     std::filesystem::create_directory(output_dir);
 
-    std::filesystem::path optim_subdir = std::filesystem::path(output_dir) / timestamp;
+    std::filesystem::path optim_subdir = std::filesystem::path(output_dir) / out_dir;
     std::filesystem::create_directory(optim_subdir);
 
     auto initial_fdn_config = CreateInitialFDNConfig(fdn_order);
-    auto result = OptimizeColorless(logger, initial_fdn_config, optimizer_params);
+    auto result = OptimizeColorless(logger, initial_fdn_config, optimizer_params,
+                                    std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight));
     LOG_INFO(logger, "Colorless optimization completed in {:.2f} s with {} evaluations.", result.total_time.count(),
              result.total_evaluations);
 

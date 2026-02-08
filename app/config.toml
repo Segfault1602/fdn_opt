@@ -1,12 +1,15 @@
 ir = "../rirs/py_rirs/rir_dining_room.wav"
 num_channels = 6
+spectral_flatness_weight = 1
+sparsity_weight = 0.5
+power_envelope_weight = 0
 
 [adam]
-step_size = 0.6
-learning_rate_decay = 0.98
+step_size = 0.98
+learning_rate_decay = 0.99
 decay_step_size = 1
-epoch_restarts = 50
-max_restarts = 1
+epoch_restarts = 100
+max_restarts = 0
 tolerance = 1e-5
 
 [spsa]
