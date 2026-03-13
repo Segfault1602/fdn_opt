@@ -345,7 +345,6 @@ arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig& config,
 
             if (std::holds_alternative<std::vector<float>>(config.matrix_info))
             {
-
                 const auto& matrix_coeffs = std::get<std::vector<float>>(config.matrix_info);
 
                 for (uint32_t r = 0; r < fdn_order; ++r)

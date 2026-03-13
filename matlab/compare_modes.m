@@ -1,6 +1,7 @@
 clearvars;
-close all;
 addpath(genpath("../../FDNToolbox"));
+
+show_previous_run = false;
 
 OUT_DIR = "../optim_output";
 
@@ -26,11 +27,21 @@ PREVIOUS_CONFIG = fullfile(PREVIOUS_DIR.folder, PREVIOUS_DIR.name, "colorless_fd
 res_out = {};
 pol_out = {};
 
-configs = [INIT_CONFIG COLORLESS_CONFIG PREVIOUS_CONFIG];
+configs = [INIT_CONFIG COLORLESS_CONFIG];
+if show_previous_run
+    configs(3) = PREVIOUS_CONFIG;
+end
 
 parfor n = 1:length(configs)
    [res, pol] = GetPolesAndResidueFromConfig(configs(n));
-   res_out{n} = res;
+   res = res / max(abs(res));
+   res = mag2db(abs(res));
+  
+   % Remove data where res < 150dB
+   pol(res < -150) = [];  % Corresponding poles are also removed
+   res(res < -150) = [];  % Remove data where res < 150dB
+
+   res_out{n} =  res;
    pol_out{n} = pol;
 end
 
@@ -41,8 +52,11 @@ res = res_out{1};
 pol = pol_out{1};
 res_opt = res_out{2};
 pol_opt = pol_out{2};
-res_prev = res_out{3};
-pol_prev = pol_out{3};
+
+if show_previous_run
+    res_prev = res_out{3};
+    pol_prev = pol_out{3};
+end
 
 % plot
 figure(1); grid on;
@@ -59,11 +73,11 @@ ylabel('Pole mag [db]')
 
 figure(2); grid on;
 
-plot(angle(pol), mag2db(abs(res)),'.', DisplayName="Init");
+plot(angle(pol),res,'.', DisplayName="Init");
 
 
 hold on;
-plot(angle(pol_opt), mag2db(abs(res_opt)),'.', DisplayName="Optim");
+plot(angle(pol_opt), res_opt,'.', DisplayName="Optim");
 
 hold off;
 legend();
@@ -73,27 +87,69 @@ ylabel('Res mag [db]')
 
 figure(3);
 
+num_row = 2;
+if show_previous_run
+    num_row = 3;
+end
 
-tiledlayout(3,1);
+normalization = "probability";
+
+tiledlayout(num_row,1);
 ax1 = nexttile;
-h1 = histogram(ax1, mag2db(abs(res)), DisplayName="Initial FDN");
+h1 = histogram(ax1, res, DisplayName="Initial FDN", Normalization=normalization);
 title("Init");
 
 ax2 = nexttile;
-h2 = histogram(ax2, mag2db(abs(res_opt)), DisplayName="Optimized FDN");
+h2 = histogram(ax2, res_opt, DisplayName="Optimized FDN", Normalization=normalization);
 title(LATEST_DIR.name, Interpreter='none')
 
-ax3 = nexttile;
-h3 = histogram(ax3, mag2db(abs(res_prev)), DisplayName="Previous Optimization");
-title(PREVIOUS_DIR.name + " (Previous)", Interpreter='none');
+if show_previous_run
+    ax3 = nexttile;
+    h3 = histogram(ax3, res_prev, DisplayName="Previous Optimization", Normalization=normalization);
+    title(PREVIOUS_DIR.name + " (Previous)", Interpreter='none');
+    h3.BinWidth = 1;
+end
 
 % h1.Normalization = 'probability';
 h1.BinWidth = 1;
 % h2.Normalization = 'probability';
 h2.BinWidth = 1;
-h3.BinWidth = 1;
 
-linkaxes([ax1 ax2 ax3], "xy");
+
+if show_previous_run
+    linkaxes([ax1 ax2 ax3], "xy");
+else
+    linkaxes([ax1 ax2], "xy");
+end
+
+figure(4);
+tiledlayout(2,1);
+
+ax1 = nexttile;
+histogram(res, Normalization="pdf", BinWidth=1);
+
+bhat = raylfit(-res);
+hold on;
+x = 0:0.1:max(-res);
+y = raylpdf(x, bhat);
+plot(-x,y,'r');
+hold off;
+title_string = sprintf("Initial, sigma=%f", bhat);
+title(title_string);
+
+ax2 = nexttile;
+histogram(res_opt, Normalization="pdf", BinWidth=1);
+
+bhat = raylfit(-res_opt);
+hold on;
+x = 0:0.1:max(-res_opt);
+y = raylpdf(x, bhat);
+plot(-x,y,'r');
+hold off;
+title_string = sprintf("Optimized, sigma=%f", bhat);
+title(title_string);
+
+ linkaxes([ax1 ax2], "xy");
 
 function [res, pol] = GetPolesAndResidueFromConfig(fdn_config)
     direct = zeros(1,1);

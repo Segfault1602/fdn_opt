@@ -31,12 +31,12 @@ enum class OptimizationStatus : uint8_t
 
 struct AdamParameters
 {
-    float step_size = 0.4253;
-    float learning_rate_decay = 0.613;
-    int decay_step_size = 50;
-    int epoch_restarts = 250;
-    int max_restarts = 1;
-    float tolerance = 1e-3;
+    float step_size = 0.5;
+    float learning_rate_decay = 0.98;
+    int decay_step_size = 1;
+    int epoch_restarts = 50;
+    int max_restarts = 2;
+    float tolerance = 1e-4;
 };
 
 struct SPSAParameters
@@ -61,12 +61,23 @@ struct SimulatedAnnealingParameters
     double gain = 0.3;
 };
 
+struct CNEParameters
+{
+    size_t population_size = 500;
+    size_t max_generations = 5000;
+    double mutation_probability = 0.1;
+    double mutation_size = 0.02;
+    double select_percent = 0.2;
+    double tolerance = 1e-5;
+};
+
 struct DifferentialEvolutionParameters
 {
     size_t population_size = 100;
     size_t max_generation = 2000;
     double crossover_rate = 0.6;
     double differential_weight = 0.8;
+    double tolerance = 1e-5;
 };
 
 struct PSOParameters
@@ -80,6 +91,7 @@ struct PSOParameters
 
 struct RandomSearchParameters
 {
+    double time_limit_seconds = 10.0;
 };
 
 struct L_BFGSParameters
@@ -117,6 +129,7 @@ enum class OptimizationAlgoType : uint8_t
     PSO,
     RandomSearch,
     CMAES,
+    CNE,
     // Below here use gradient information
     Adam,
     L_BFGS,
@@ -134,6 +147,8 @@ constexpr const char* OptimizationAlgoTypeToString(OptimizationAlgoType type)
         return "SPSA";
     case OptimizationAlgoType::SimulatedAnnealing:
         return "Simulated Annealing";
+    case OptimizationAlgoType::CNE:
+        return "CNE";
     case OptimizationAlgoType::DifferentialEvolution:
         return "Differential Evolution";
     case OptimizationAlgoType::PSO:
@@ -153,7 +168,8 @@ constexpr const char* OptimizationAlgoTypeToString(OptimizationAlgoType type)
 
 using OptimizationAlgoParams =
     std::variant<AdamParameters, SPSAParameters, SimulatedAnnealingParameters, DifferentialEvolutionParameters,
-                 PSOParameters, RandomSearchParameters, L_BFGSParameters, GradientDescentParameters, CMAESParameters>;
+                 PSOParameters, RandomSearchParameters, L_BFGSParameters, GradientDescentParameters, CMAESParameters,
+                 CNEParameters>;
 
 struct OptimizationInfo
 {

@@ -1,27 +1,60 @@
 ir = "../rirs/py_rirs/rir_dining_room.wav"
-num_channels = 6
+num_channels = 8
 spectral_flatness_weight = 1
-sparsity_weight = 0.5
+sparsity_weight = 1
 power_envelope_weight = 0
+randomize_initial_params = false
 
-[adam]
-step_size = 0.98
-learning_rate_decay = 0.99
+[Adam]
+step_size = 0.9
+learning_rate_decay = 0.95
 decay_step_size = 1
 epoch_restarts = 100
-max_restarts = 0
+max_restarts = 1
 tolerance = 1e-5
 
-[spsa]
+[SPSA]
 alpha = 0.01
 gamma = 0.101
 step_size = 0.9
 evaluation_step_size = 0.9
-max_iterations = 1e6
+max_iterations = 1000000
 tolerance = 1e-5
 
-[lbfgs]
-num_basis = 10
+[SimulatedAnnealing]
+max_iteration = 100000
+initial_temperature = 1000
+init_moves = 1000
+move_ctrl_sweep = 10
+max_tolerance_sweep = 3
+max_move_coeff = 20.0
+init_move_coeff = 0.3
+gain = 0.3
+
+[CNE]
+population_size = 5000
+max_generation = 5000
+mutation_probability = 0.3
+mutation_size = 0.1
+select_percent = 0.5
+tolerance = 1e-5
+
+[DifferentialEvolution]
+population_size = 100
+max_generation = 2000
+crossover_rate = 0.6
+differential_weight = 0.8
+tolerance = 1e5
+
+[PSO]
+num_particles = 250
+max_iteration = 3000
+horizon_size = 350
+exploitation_factor = 2.05
+exploration_factor = 2.05
+
+[L-BFGS]
+num_basis = 30
 max_iterations = 1000
 wolfe = 0.9
 min_gradient_norm = 1e-6
@@ -30,8 +63,16 @@ max_line_search = 50
 min_step = 1e-20
 max_step = 1e20
 
-[cmaes]
+[GradientDescent]
+step_size = 0.6
+max_iteration = 1e6
+tolerance = 1e-5
+
+[CMAES]
 population_size = 0
 max_iterations = 1000
 tolerance = 1e-5
-step_size = 0
+step_size = 0.6
+
+[RandomSearch]
+time_limit = 10.0

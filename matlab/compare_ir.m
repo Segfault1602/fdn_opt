@@ -1,4 +1,4 @@
-clearvars;close all;
+clearvars;
 addpath(genpath("../../FDNToolbox"));
 
 OUT_DIR = "../optim_output";
@@ -26,22 +26,36 @@ fprintf("Previous: %s\n", PREVIOUS_DIR.name);
 [init_ir, init_fs] = audioread(INIT_IR);
 [opt_ir, opt_fs] = audioread(COLORLESS_IR);
 
+init_ir = init_ir(1:init_fs);
+opt_ir = opt_ir(1:opt_fs);
+
 irLen = size(init_ir,1);
 
 noise = randn(irLen,1);
 noise = noise / max(abs(noise));
 
-figure(1);
+figure(1);clf;
 tiledlayout(2,1);
 
 ax1 = nexttile;
+[t_abel, edc_init] = echoDensity(init_ir, 4096, opt_fs, 0);
 plot(ax1, init_ir);
+hold on;
+plot(ax1, edc_init);
+hold off;
 title('Initial Impulse Response');
 xlabel('Samples');
 ylabel('Amplitude');
 
 ax2 = nexttile;
+
+[t_abel, edc] = echoDensity(opt_ir, 4096, opt_fs, 0);
+
 plot(ax2, opt_ir);
+hold on;
+plot(ax2, edc);
+plot(ax2, edc_init, "--");
+hold off;
 title('Optimized Impulse Response');
 xlabel('Samples');
 ylabel('Amplitude');
@@ -52,7 +66,7 @@ linkaxes([ax1 ax2], "xy");
 WIN_LEN = 2^13;
 OVL_LEN = round(0.5*WIN_LEN);
 
-figure(2);
+figure(2);clf;
 spectralFlatness(init_ir, init_fs, Window=rectwin(WIN_LEN), OverlapLength=OVL_LEN, ...
               Range=[0,init_fs/2]);
 
@@ -79,7 +93,7 @@ ylim([0 1]);
 legend("initial", "optimized", "Noise");
 title("Spectral Flatness");
 
-figure(3);
+figure(3);clf;
 sparsity_win = 2^13;
 sparsity_ovl = round(0.9*sparsity_win);
 [sparsity_losses, init_sparsity_loss] = SparsityLoss(init_ir, sparsity_win, sparsity_ovl);
@@ -101,7 +115,7 @@ title("Sparsity Loss");
 grid on;
 
 
-figure(4);
+figure(4);clf;
 loss_history_file = fullfile(LATEST_DIR.folder, LATEST_DIR.name,"colorless_loss_history.txt");
 losses = readtable(loss_history_file, "VariableNamingRule","preserve");
 
@@ -155,3 +169,30 @@ for n = 1:size(losses,2)
     grid on;
 end
 
+figure(5);
+XF_init = mag2db(abs(fft(init_ir)));
+XF_optim = mag2db(abs(fft(opt_ir)));
+
+L = length(XF_init);
+f = init_fs / L *(0:L-1);
+
+
+tiledlayout(2,1);
+
+
+ax1 = nexttile;
+plot(ax1, f, XF_init, DisplayName="Initial IR Magnitude");
+title("Power Spectrum - Initial");
+xlabel("Frequency (Hz)");
+ylabel("Magnitude (dB)");
+grid on;
+
+ax2 = nexttile;
+plot(ax2, f, XF_optim, DisplayName="Optimized IR Magnitude");
+title("Power Spectrum - Optimized");
+xlabel("Frequency (Hz)");
+ylabel("Magnitude (dB)");
+grid on;
+
+linkaxes([ax1 ax2], "xy");
+xlim([1000 5000]);

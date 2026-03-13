@@ -82,7 +82,32 @@ class OptimCallback
                 if (de_pop_evals_ == de_pop_size_ * 2) // Each generation evaluates 2 * population size
                 {
                     de_pop_evals_ = 0;
+                    function.Evaluate(de_best_params_);
                     SaveLossHistory(function, de_best_objective_);
+                    de_best_objective_ = std::numeric_limits<double>::max();
+                    de_best_params_.zeros();
+                }
+            }
+        }
+        else if constexpr (std::is_same_v<OptimizerType, ens::CNE>)
+        {
+            if (de_pop_size_ > 0)
+            {
+                if (objective < de_best_objective_)
+                {
+                    de_best_objective_ = objective;
+                    de_best_params_ = iterate;
+                }
+                // For DE, there is no easy way to get the best objective per generation so we have to keep track of
+                // it manually.
+                ++de_pop_evals_;
+                if (de_pop_evals_ == de_pop_size_) // Each generation evaluates 2 * population size
+                {
+                    de_pop_evals_ = 0;
+                    function.Evaluate(de_best_params_);
+                    SaveLossHistory(function, de_best_objective_);
+                    de_best_objective_ = std::numeric_limits<double>::max();
+                    de_best_params_.zeros();
                 }
             }
         }
@@ -121,6 +146,7 @@ class OptimCallback
         if constexpr (std::is_same_v<OptimizerType, ens::SA<ens::ExponentialSchedule>> ||
                       std::is_same_v<OptimizerType, ens::LBestPSO> || std::is_same_v<OptimizerType, ens::L_BFGS> ||
                       std::is_same_v<OptimizerType, ens::GradientDescent> ||
+                      is_same_template_v<OptimizerType, ens::GradientDescentType<>> ||
                       is_same_template_v<OptimizerType, ens::CMAES<>> ||
                       is_same_template_v<OptimizerType, ens::ActiveCMAES<>>)
         {
@@ -230,11 +256,22 @@ struct OptimizationVisitor
         params = store_best.BestCoordinates();
     }
 
+    void operator()(CNEParameters& p)
+    {
+        optim_callback->de_pop_size_ = static_cast<int>(p.population_size);
+        ens::CNE optimizer(p.population_size, p.max_generations, p.mutation_probability, p.mutation_size,
+                           p.select_percent, p.tolerance);
+
+        ens::StoreBestCoordinates<arma::mat> store_best;
+        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
+
+        params = store_best.BestCoordinates();
+    }
+
     void operator()(DifferentialEvolutionParameters& p)
     {
-
         optim_callback->de_pop_size_ = static_cast<int>(p.population_size);
-        ens::DE optimizer(p.population_size, p.max_generation, p.crossover_rate, p.differential_weight, 1e-7);
+        ens::DE optimizer(p.population_size, p.max_generation, p.crossover_rate, p.differential_weight, p.tolerance);
 
         ens::StoreBestCoordinates<arma::mat> store_best;
         optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
@@ -244,7 +281,7 @@ struct OptimizationVisitor
 
     void operator()(PSOParameters& p)
     {
-        ens::LBestPSO optimizer(p.num_particles, 1.0, 1.0, p.max_iterations, p.horizon_size, 1e-7,
+        ens::LBestPSO optimizer(p.num_particles, -1.0, 1.0, p.max_iterations, p.horizon_size, 1e-5,
                                 p.exploitation_factor, p.exploration_factor);
 
         ens::StoreBestCoordinates<arma::mat> store_best;
@@ -257,24 +294,13 @@ struct OptimizationVisitor
         }
     }
 
-    void operator()(RandomSearchParameters&)
+    void operator()(RandomSearchParameters& p)
     {
         RandomSearcher optimizer;
         optim_callback->BeginOptimization(optimizer, model, params);
         std::stop_token stop_token = optim_callback->stop_token_;
         params = model.GetInitialParams();
-        optimizer.StartSearch(model, stop_token);
-
-        while (!stop_token.stop_requested())
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-            params = optimizer.GetBestParams();
-            auto best_objective = optimizer.GetBestObjective();
-            optim_callback->evaluation_count_ = optimizer.GetEvaluationCount();
-            model.Evaluate(params);
-            optim_callback->SaveLossHistory(model, best_objective);
-        }
+        optimizer.StartSearch(model, stop_token, p.time_limit_seconds, optim_callback);
 
         params = optimizer.GetBestParams();
         optim_callback->evaluation_count_ = optimizer.GetEvaluationCount();
@@ -301,7 +327,13 @@ struct OptimizationVisitor
 
     void operator()(GradientDescentParameters& p)
     {
-        ens::SGD optimizer(p.step_size, 1, p.max_iterations, p.tolerance, false);
+        // ens::SGD optimizer(p.step_size, 1, p.max_iterations, p.tolerance, false);
+        constexpr double kappa = 0.2;
+        constexpr double phi = 0.8;
+        constexpr double momentum = 0.5;
+        constexpr double minGain = 1e-8;
+        ens::MomentumDeltaBarDelta optimizer(p.step_size, p.max_iterations, p.tolerance, kappa, phi, momentum, minGain,
+                                             false);
 
         ens::StoreBestCoordinates<arma::mat> store_best;
         optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
@@ -311,9 +343,9 @@ struct OptimizationVisitor
 
     void operator()(CMAESParameters& p)
     {
-        // ens::BoundaryBoxConstraint b(-1.0, 1.0);
-        ens::ActiveCMAES optimizer(p.population_size, ens::EmptyTransformation(), 1, p.max_iterations, p.tolerance,
-                                   ens::FullSelection(), p.step_size);
+        ens::BoundaryBoxConstraint b(-1.0, 1.0);
+        ens::BIPOP_CMAES optimizer(p.population_size, ens::EmptyTransformation<>(), 1, p.max_iterations, p.tolerance, ens::FullSelection(),
+                                   p.step_size, 3, 3, 1e6);
 
         ens::StoreBestCoordinates<arma::mat> store_best;
         optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
@@ -502,6 +534,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     {
         if (info.spectral_flatness_weight > 0.0)
         {
+            LOG_INFO(logger_, "Adding spectral flatness loss with weight {}", info.spectral_flatness_weight);
             LossFunction spectral_flatness_loss;
             spectral_flatness_loss.func = [&](std::span<const float> signal) -> double {
                 double spectral_flatness = SpectralFlatnessLoss(signal);
@@ -514,6 +547,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
 
         if (info.power_envelope_weight > 0.0)
         {
+            LOG_INFO(logger_, "Adding power envelope loss with weight {}", info.power_envelope_weight);
             LossFunction power_env_loss;
             power_env_loss.func = [&](std::span<const float> signal) -> double {
                 constexpr uint32_t kSampleRate = 48000;
@@ -526,6 +560,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
 
         if (info.sparsity_weight > 0.0)
         {
+            LOG_INFO(logger_, "Adding sparsity loss with weight {}", info.sparsity_weight);
             LossFunction sparsity_loss;
             sparsity_loss.func = [&](std::span<const float> signal) -> double {
                 double sparsity = SparsityLoss(signal.subspan(0, 4096));
