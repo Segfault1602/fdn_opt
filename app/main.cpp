@@ -428,9 +428,9 @@ int main(int argc, char** argv)
     }
 
     auto now = std::chrono::system_clock::now();
-    auto local_now = std::chrono::current_zone()->to_local(std::chrono::floor<std::chrono::seconds>(now));
+    // auto local_now = std::chrono::current_zone()->to_local(std::chrono::floor<std::chrono::seconds>(now));
 
-    std::string timestamp = std::format("{:%Y%m%d_%H%M%S}", local_now);
+    std::string timestamp = std::format("{:%Y%m%d_%H%M%S}", now);
     LOG_INFO(logger, "Optimization timestamp: {}", timestamp);
 
     std::string out_dir = timestamp + "_" + selected_optimizer;

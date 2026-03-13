@@ -6,7 +6,6 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
-#include <omp.h>
 
 namespace
 {
