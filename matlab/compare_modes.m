@@ -1,7 +1,7 @@
 clearvars;
 addpath(genpath("../../FDNToolbox"));
 
-show_previous_run = false;
+show_previous_run = true;
 
 OUT_DIR = "../optim_output";
 
@@ -34,7 +34,7 @@ end
 
 parfor n = 1:length(configs)
    [res, pol] = GetPolesAndResidueFromConfig(configs(n));
-   res = res / max(abs(res));
+   % res = res / max(abs(res));
    res = mag2db(abs(res));
   
    % Remove data where res < 150dB
@@ -59,7 +59,7 @@ if show_previous_run
 end
 
 % plot
-figure(1); grid on;
+figure(1); clf;grid on;
 
 plot(angle(pol), mag2db(abs(pol)),'.', DisplayName="Init");
 
@@ -92,7 +92,7 @@ if show_previous_run
     num_row = 3;
 end
 
-normalization = "probability";
+normalization = "pdf";
 
 tiledlayout(num_row,1);
 ax1 = nexttile;
@@ -111,9 +111,9 @@ if show_previous_run
 end
 
 % h1.Normalization = 'probability';
-h1.BinWidth = 1;
+h1.BinWidth = 2;
 % h2.Normalization = 'probability';
-h2.BinWidth = 1;
+h2.BinWidth = 2;
 
 
 if show_previous_run
@@ -126,30 +126,33 @@ figure(4);
 tiledlayout(2,1);
 
 ax1 = nexttile;
-histogram(res, Normalization="pdf", BinWidth=1);
+histogram(res, Normalization="pdf", BinWidth=2);
 
-bhat = raylfit(-res);
+offset = abs(max(res)) - 1;
+bhat = raylfit(-res - offset);
 hold on;
 x = 0:0.1:max(-res);
 y = raylpdf(x, bhat);
-plot(-x,y,'r');
+plot(-x - offset,y,'r');
 hold off;
 title_string = sprintf("Initial, sigma=%f", bhat);
 title(title_string);
 
 ax2 = nexttile;
-histogram(res_opt, Normalization="pdf", BinWidth=1);
+histogram(res_opt, Normalization="pdf", BinWidth=2);
 
-bhat = raylfit(-res_opt);
+offset = abs(max(res_opt)) - 1;
+bhat = raylfit(-res_opt - offset);
 hold on;
 x = 0:0.1:max(-res_opt);
 y = raylpdf(x, bhat);
-plot(-x,y,'r');
+plot(-x - offset,y,'r');
 hold off;
 title_string = sprintf("Optimized, sigma=%f", bhat);
 title(title_string);
 
  linkaxes([ax1 ax2], "xy");
+ xlim([-150 -50]);
 
 function [res, pol] = GetPolesAndResidueFromConfig(fdn_config)
     direct = zeros(1,1);
@@ -157,16 +160,9 @@ function [res, pol] = GetPolesAndResidueFromConfig(fdn_config)
       
     N = length(B_init);
     
-    gainPerSample = db2mag(RT602slope(10, 48000));
+    gainPerSample = db2mag(RT602slope(3, 48000));
     gainPerSamples = (gainPerSample.^m_init).';
-    
-    absorption.a = zeros(N,1,2);
-    absorption.a(:,1,1) = 1;
-    absorption.b = zeros(N,1,2);
-    absorption.b(:,1,1) = gainPerSamples;
-    absorption.b(:,1,2) = 0;
-    zAbsorption = zTF(absorption.b,absorption.a,'isDiagonal',true);
-    
+    A_init = A_init * diag(gainPerSamples);    
 
-    [res, pol, ~, ~] = dss2pr(m_init, A_init, B_init, C_init, direct, 'absorptionFilters', zAbsorption);
+    [res, pol, ~, ~] = dss2pr(m_init, A_init, B_init, C_init, direct);
 end

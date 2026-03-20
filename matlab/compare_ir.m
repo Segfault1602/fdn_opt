@@ -16,7 +16,7 @@ RESULTS = RESULTS(idx);
 LATEST_DIR = RESULTS(end);
 PREVIOUS_DIR = RESULTS(end-1);
 
-INIT_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "colorless_initial_ir.wav");
+INIT_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "initial_ir.wav");
 COLORLESS_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "colorless_ir.wav");
 PREVIOUS_IR = fullfile(PREVIOUS_DIR.folder, PREVIOUS_DIR.name, "colorless_ir.wav");
 
@@ -25,6 +25,7 @@ fprintf("Previous: %s\n", PREVIOUS_DIR.name);
 
 [init_ir, init_fs] = audioread(INIT_IR);
 [opt_ir, opt_fs] = audioread(COLORLESS_IR);
+opt_ir = opt_ir / max(abs(opt_ir));
 
 init_ir = init_ir(1:init_fs);
 opt_ir = opt_ir(1:opt_fs);
@@ -42,6 +43,11 @@ ax1 = nexttile;
 plot(ax1, init_ir);
 hold on;
 plot(ax1, edc_init);
+
+if t_abel > 0
+    xline(t_abel / 1000 * init_fs);
+end
+
 hold off;
 title('Initial Impulse Response');
 xlabel('Samples');
@@ -55,6 +61,10 @@ plot(ax2, opt_ir);
 hold on;
 plot(ax2, edc);
 plot(ax2, edc_init, "--");
+if t_abel > 0
+    xline(t_abel / 1000 * init_fs);
+end
+
 hold off;
 title('Optimized Impulse Response');
 xlabel('Samples');
@@ -67,22 +77,23 @@ WIN_LEN = 2^13;
 OVL_LEN = round(0.5*WIN_LEN);
 
 figure(2);clf;
+flat_range = [32 16000];
 spectralFlatness(init_ir, init_fs, Window=rectwin(WIN_LEN), OverlapLength=OVL_LEN, ...
-              Range=[0,init_fs/2]);
+              Range=flat_range);
 
 init_flat = spectralFlatness(init_ir, init_fs, Window=rectwin(size(init_ir,1)), OverlapLength=OVL_LEN, ...
-              Range=[0,init_fs/2]);
+              Range=flat_range);
 
 hold on;
 spectralFlatness(opt_ir, opt_fs, Window=rectwin(WIN_LEN), OverlapLength=OVL_LEN, ...
-              Range=[0,opt_fs/2]);
+              Range=flat_range);
 optim_flat = spectralFlatness(opt_ir, opt_fs, Window=rectwin(size(opt_ir,1)), OverlapLength=OVL_LEN, ...
-              Range=[0,opt_fs/2]);
+              Range=flat_range);
 
 spectralFlatness(noise, opt_fs, Window=rectwin(WIN_LEN), OverlapLength=OVL_LEN, ...
-              Range=[0,opt_fs/2]);
+              Range=flat_range);
 noise_flat = spectralFlatness(noise, opt_fs, Window=rectwin(size(noise,1)), OverlapLength=OVL_LEN, ...
-              Range=[0,opt_fs/2]);
+              Range=flat_range);
 
 yline(init_flat, "b--", DisplayName="Initial Flatness");
 yline(optim_flat, "r--", DisplayName="Optimized Flatness");

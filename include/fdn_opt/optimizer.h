@@ -32,11 +32,13 @@ enum class OptimizationStatus : uint8_t
 struct AdamParameters
 {
     float step_size = 0.5;
-    float learning_rate_decay = 0.98;
+    float beta1 = 0.9;
+    float beta2 = 0.999;
+    float learning_rate_decay = 1.0;
     int decay_step_size = 1;
-    int epoch_restarts = 50;
-    int max_restarts = 2;
-    float tolerance = 1e-4;
+    int epoch_restarts = 100;
+    int max_restarts = 0;
+    float tolerance = 1e-5;
 };
 
 struct SPSAParameters
@@ -59,6 +61,7 @@ struct SimulatedAnnealingParameters
     double max_move_coef = 20.0;
     double init_move_coef = 0.3;
     double gain = 0.3;
+    double tolerance = 1e-5;
 };
 
 struct CNEParameters
@@ -87,6 +90,7 @@ struct PSOParameters
     size_t horizon_size = 350;
     double exploitation_factor = 2.05;
     double exploration_factor = 2.05;
+    double tolerance = 1e-5;
 };
 
 struct RandomSearchParameters
@@ -111,6 +115,11 @@ struct GradientDescentParameters
     double step_size = 0.01;
     size_t max_iterations = 1e6;
     double tolerance = 1e-5;
+
+    double kappa = 0.2;
+    double phi = 0.8;
+    double momentum = 0.5;
+    double min_gain = 1e-8;
 };
 
 struct CMAESParameters
@@ -185,7 +194,7 @@ struct OptimizationInfo
     double power_envelope_weight = 1.0;
 
     // RIR match loss weights
-    double edc_weight = 0.0;
+    double edc_weight = 1.0;
     double mel_edr_weight = 1.0;
 
     uint32_t mel_edr_fft_length = 4096;
@@ -221,7 +230,7 @@ class OptimCallback;
 class FDNOptimizer
 {
   public:
-    FDNOptimizer(quill::Logger* logger);
+    FDNOptimizer(quill::Logger* logger, bool verbose = false);
     ~FDNOptimizer();
 
     void StartOptimization(OptimizationInfo& info);
@@ -237,6 +246,7 @@ class FDNOptimizer
     void ThreadProc(std::stop_token stop_token, OptimizationInfo info);
 
     quill::Logger* logger_;
+    bool verbose_;
     std::atomic<OptimizationStatus> status_;
 
     std::chrono::steady_clock::time_point start_time_;

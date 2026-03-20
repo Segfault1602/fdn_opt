@@ -24,9 +24,21 @@
 #include <thread>
 #include <vector>
 
-constexpr uint32_t kFDNOrder = 8;
+const std::vector<float> kInitialInputGains = {0.021565, -0.10697,  0.271459, -0.507918,
+                                               0.696453, -0.366612, 0.161309, -0.10464};
+const std::vector<float> kInitialOutputGains = {0.467987, -0.403734, 0.303612,  -0.192053,
+                                                0.166956, -0.442626, -0.503543, -0.107584};
 
-sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = false)
+const std::vector<float> kOptimizedMatrix = {
+    0.700161,   -0.0379672, -0.351466,  0.546243,  0.248043,   -0.0527009, 0.0695207,  -0.13148,   0.359406,  0.841295,
+    0.106511,   -0.182104,  -0.327287,  0.0915586, -0.0347661, -0.0428309, -0.115603,  -0.0647493, 0.500109,  0.627607,
+    -0.389675,  0.0714991,  -0.332708,  -0.266066, -0.381827,  0.41174,    -0.0327591, 0.409852,   0.463725,  0.408213,
+    0.0292857,  0.364815,   0.0419472,  0.0523951, 0.066017,   -0.268326,  0.522374,   0.146676,   -0.623391, -0.485936,
+    0.14331,    -0.14488,   0.365672,   -0.113971, 0.111146,   0.571918,   0.588995,   -0.35413,   -0.370269, 0.304733,
+    -0.0730987, 0.144298,   0.160557,   -0.517478, 0.376585,   -0.555424,  -0.249098,  -0.02145,   -0.68595,  0.027881,
+    -0.391745,  0.447998,   -0.0711281, -0.327048};
+
+sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = false, bool random_delays = false)
 {
     sfFDN::FDNConfig initial_fdn_config{};
     initial_fdn_config.N = fdn_order;
@@ -53,15 +65,26 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
         initial_fdn_config.delays = sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Random, 42);
     }
 
+    if (random_delays)
+    {
+        std::cout << "Using random delays..." << std::endl;
+        initial_fdn_config.delays = sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Uniform);
+    }
+
     if (randomize)
     {
-        std::mt19937 rng(42);
-        std::normal_distribution<float> gain_dist(-1.f, 1.f);
+        arma::fvec input_gains(fdn_order, arma::fill::randn);
+        arma::fvec output_gains(fdn_order, arma::fill::randn);
+
+        input_gains /= arma::norm(input_gains, 2);
+        output_gains /= arma::norm(output_gains, 2);
+
         for (uint32_t i = 0; i < fdn_order; ++i)
         {
-            initial_fdn_config.input_gains[i] = gain_dist(rng);
-            initial_fdn_config.output_gains[i] = gain_dist(rng);
+            initial_fdn_config.input_gains[i] = input_gains(i);
+            initial_fdn_config.output_gains[i] = output_gains(i);
         }
+
         initial_fdn_config.matrix_info = sfFDN::GenerateMatrix(fdn_order, sfFDN::ScalarMatrixType::Random);
     }
     else
@@ -103,7 +126,8 @@ fdn_optimization::OptimizationResult DoOptimization(quill::Logger* logger, fdn_o
 fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                        const sfFDN::FDNConfig& initial_fdn_config,
                                                        const fdn_optimization::OptimizationAlgoParams& optimizer_params,
-                                                       const std::tuple<double, double, double>& loss_weights)
+                                                       const std::tuple<double, double, double>& loss_weights,
+                                                       float gradient_delta, bool verbose)
 {
 
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::Gains,
@@ -113,14 +137,14 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                 .initial_fdn_config = initial_fdn_config,
                                                 .ir_size = kSampleRate,
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
-                                                .gradient_delta = 1e-4,
+                                                .gradient_delta = gradient_delta,
                                                 .spectral_flatness_weight = std::get<0>(loss_weights),
                                                 .sparsity_weight = std::get<1>(loss_weights),
                                                 .power_envelope_weight = std::get<2>(loss_weights),
                                                 .target_rir = {},
                                                 .optimizer_params = optimizer_params};
 
-    fdn_optimization::FDNOptimizer optimizer(logger);
+    fdn_optimization::FDNOptimizer optimizer(logger, verbose);
 
     optimizer.StartOptimization(opt_info);
 
@@ -139,8 +163,8 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
         {
             last_loss = static_cast<float>(progress.loss_history[0].back());
         }
-        LOG_INFO(logger, "Elapsed Time: {:.2f} s, Evaluations: {}, Last Loss: {:.6f}", progress.elapsed_time.count(),
-                 progress.evaluation_count, last_loss);
+        LOG_DEBUG(logger, "Elapsed Time: {:.2f} s, Evaluations: {}, Last Loss: {:.6f}", progress.elapsed_time.count(),
+                  progress.evaluation_count, last_loss);
     }
 
     auto result = optimizer.GetResult();
@@ -148,14 +172,17 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
 }
 
 fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, const sfFDN::FDNConfig& initial_fdn_config,
-                                                      const std::vector<float>& target_rir)
+                                                      const fdn_optimization::OptimizationAlgoParams& optimizer_params,
+                                                      const std::vector<float>& target_rir,
+                                                      const std::tuple<double, double>& loss_weights,
+                                                      float gradient_delta, bool verbose)
 {
-    fdn_optimization::AdamParameters opt_params{.step_size = 0.5,
-                                                .learning_rate_decay = 0.99,
-                                                .decay_step_size = 1,
-                                                .epoch_restarts = 180,
-                                                .max_restarts = 3,
-                                                .tolerance = 1e-4};
+    // fdn_optimization::AdamParameters opt_params{.step_size = 0.5,
+    //                                             .learning_rate_decay = 0.99,
+    //                                             .decay_step_size = 1,
+    //                                             .epoch_restarts = 180,
+    //                                             .max_restarts = 3,
+    //                                             .tolerance = 1e-4};
 
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::AttenuationFilters,
                                       fdn_optimization::OptimizationParamType::TonecorrectionFilters,
@@ -165,11 +192,13 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
                                                 .initial_fdn_config = initial_fdn_config,
                                                 .ir_size = static_cast<uint32_t>(target_rir.size()),
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
-                                                .gradient_delta = 1e-2,
+                                                .gradient_delta = gradient_delta,
+                                                .edc_weight = std::get<0>(loss_weights),
+                                                .mel_edr_weight = std::get<1>(loss_weights),
                                                 .target_rir = target_rir,
-                                                .optimizer_params = opt_params};
+                                                .optimizer_params = optimizer_params};
 
-    fdn_optimization::FDNOptimizer optimizer(logger);
+    fdn_optimization::FDNOptimizer optimizer(logger, verbose);
 
     optimizer.StartOptimization(opt_info);
 
@@ -188,8 +217,8 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
         {
             last_loss = static_cast<float>(progress.loss_history[0].back());
         }
-        LOG_INFO(logger, "Elapsed Time: {:.2f} s, Evaluations: {}, Last Loss: {:.6f}", progress.elapsed_time.count(),
-                 progress.evaluation_count, last_loss);
+        LOG_DEBUG(logger, "Elapsed Time: {:.2f} s, Evaluations: {}, Last Loss: {:.6f}", progress.elapsed_time.count(),
+                  progress.evaluation_count, last_loss);
     }
 
     auto result = optimizer.GetResult();
@@ -207,40 +236,62 @@ int main(int argc, char** argv)
     std::string ir_filename;
     app.add_option("-i,--ir", ir_filename, "Path to target RIR WAV file")->check(CLI::ExistingFile);
 
-    uint32_t fdn_order = kFDNOrder;
-    app.add_option("-n,--num_channels", fdn_order, "FDN order (number of channels), e.g., 4, 6, 8")
-        ->default_val(kFDNOrder);
+    uint32_t fdn_order = 6;
+    app.add_option("-n,--num_channels", fdn_order, "FDN order (number of channels), e.g., 4, 6, 8")->default_val(6);
 
     bool colorless_only = false;
     app.add_flag("-c,--colorless_only", colorless_only, "Only perform colorless optimization");
+
+    bool spectrum_only = false;
+    app.add_flag("--spectrum_only", spectrum_only, "Only perform spectrum optimization");
+
+    bool save_output = true;
+    app.add_flag("-s,--save_output", save_output, "Save optimization results to output directory");
+
+    bool verbose = false;
+    app.add_flag("-v,--verbose", verbose, "Enable verbose logging");
 
     double spectral_flatness_weight = 1.0;
     app.add_option("--spectral_flatness_weight", spectral_flatness_weight, "Weight for spectral flatness loss term")
         ->default_val(1.0);
     double sparsity_weight = 1.0;
     app.add_option("--sparsity_weight", sparsity_weight, "Weight for sparsity loss term")->default_val(1.0);
-    double power_envelope_weight = 1.0;
+    double power_envelope_weight = 0.0;
     app.add_option("--power_envelope_weight", power_envelope_weight, "Weight for power envelope loss term")
-        ->default_val(1.0);
+        ->default_val(0.0);
+
+    double edc_weight = 1.0;
+    app.add_option("--edc_weight", edc_weight, "Weight for EDC loss term")->default_val(1.0);
+    double mel_edr_weight = 1.0;
+    app.add_option("--mel_edr_weight", mel_edr_weight, "Weight for Mel EDR loss term")->default_val(1.0);
 
     bool randomize_initial = false;
     app.add_flag("--randomize_initial_params", randomize_initial,
                  "Randomize initial FDN configuration instead of using Householder matrix");
 
+    bool random_delays = false;
+    app.add_flag("--random_delays", random_delays, "Use random delay lengths instead of predefined sets");
+
     std::string output_dir = "optim_output";
     app.add_option("-o,--output_dir", output_dir, "Output directory for optimization results    ")
         ->capture_default_str();
+
+    float gradient_delta = 1e-4;
+    app.add_option("--gradient_delta", gradient_delta, "Delta value for numerical gradient estimation")
+        ->default_val(1e-4);
+
+    float gradient_delta_filter = 1e-2;
+    app.add_option("--gradient_delta_filter", gradient_delta_filter,
+                   "Delta value for numerical gradient estimation when optimizing filters");
 
     // ADAM
     CLI::App* adam_sub = app.add_subcommand("Adam", "Use Adam optimization algorithm");
     fdn_optimization::AdamParameters adam_params;
     adam_sub->add_option("--step_size", adam_params.step_size, "Step size for Adam optimizer");
-    adam_sub->add_option("--learning_rate_decay", adam_params.learning_rate_decay,
-                         "Learning rate decay for Adam optimizer");
-    adam_sub->add_option("--decay_step_size", adam_params.decay_step_size, "Decay step size for Adam optimizer");
-    adam_sub->add_option("--epoch_restarts", adam_params.epoch_restarts, "Number of epoch restarts for Adam optimizer");
-    adam_sub->add_option("--max_restarts", adam_params.max_restarts, "Maximum number of restarts for Adam optimizer");
+    adam_sub->add_option("--beta1", adam_params.beta1, "Beta1 parameter for Adam optimizer");
+    adam_sub->add_option("--beta2", adam_params.beta2, "Beta2 parameter for Adam optimizer");
     adam_sub->add_option("--tolerance", adam_params.tolerance, "Tolerance for Adam optimizer");
+    adam_sub->add_option("--gradient_delta", gradient_delta, "Gradient delta for Adam optimizer")->default_val(1e-4);
 
     // SPSA
     CLI::App* spsa_sub = app.add_subcommand("SPSA", "Use SPSA optimization algorithm");
@@ -263,10 +314,11 @@ int main(int argc, char** argv)
     sa_sub->add_option("--move_ctrl_sweep", sa_params.move_ctrl_sweep, "Move control sweep for Simulated Annealing");
     sa_sub->add_option("--max_tolerance_sweep", sa_params.max_tolerance_sweep,
                        "Max tolerance sweep for Simulated Annealing");
-    sa_sub->add_option("--max_move_coef", sa_params.max_move_coef, "Max move coefficient for Simulated Annealing");
-    sa_sub->add_option("--init_move_coef", sa_params.init_move_coef,
+    sa_sub->add_option("--max_move_coeff", sa_params.max_move_coef, "Max move coefficient for Simulated Annealing");
+    sa_sub->add_option("--init_move_coeff", sa_params.init_move_coef,
                        "Initial move coefficient for Simulated Annealing");
     sa_sub->add_option("--gain", sa_params.gain, "Gain for Simulated Annealing");
+    sa_sub->add_option("--tolerance", sa_params.tolerance, "Tolerance for Simulated Annealing");
 
     // CNE
     CLI::App* cne_sub = app.add_subcommand("CNE", "Use CNE optimization algorithm");
@@ -298,8 +350,10 @@ int main(int argc, char** argv)
     pso_sub->add_option("--num_particles", pso_params.num_particles, "Number of particles for PSO optimizer");
     pso_sub->add_option("--max_iterations", pso_params.max_iterations, "Maximum iterations for PSO optimizer");
     pso_sub->add_option("--horizon_size", pso_params.horizon_size, "Horizon size for PSO optimizer");
-    pso_sub->add_option("--inertia_weight", pso_params.exploitation_factor, "Exploitation factor for PSO optimizer");
+    pso_sub->add_option("--exploitation_factor", pso_params.exploitation_factor,
+                        "Exploitation factor for PSO optimizer");
     pso_sub->add_option("--exploration_factor", pso_params.exploration_factor, "Exploration factor for PSO optimizer");
+    pso_sub->add_option("--tolerance", pso_params.tolerance, "Tolerance for PSO optimizer");
 
     // L-BFGS
     CLI::App* lbfgs_sub = app.add_subcommand("L-BFGS", "Use L-BFGS optimization algorithm");
@@ -310,10 +364,13 @@ int main(int argc, char** argv)
     lbfgs_sub->add_option("--min_gradient_norm", lbfgs_params.min_gradient_norm,
                           "Minimum gradient norm for L-BFGS optimizer");
     lbfgs_sub->add_option("--factor", lbfgs_params.factor, "Factor for L-BFGS optimizer");
-    lbfgs_sub->add_option("--max_line_search_trials", lbfgs_params.max_line_search_trials,
+    lbfgs_sub->add_option("--max_line_search", lbfgs_params.max_line_search_trials,
                           "Maximum line search trials for L-BFGS optimizer");
     lbfgs_sub->add_option("--min_step", lbfgs_params.min_step, "Minimum step size for L-BFGS optimizer");
     lbfgs_sub->add_option("--max_step", lbfgs_params.max_step, "Maximum step size for L-BFGS optimizer");
+    lbfgs_sub
+        ->add_option("--gradient_delta", gradient_delta, "Gradient delta for L-BFGS optimizer when optimizing filters")
+        ->default_val(1e-2);
 
     // Gradient Descent
     CLI::App* gd_sub = app.add_subcommand("GradientDescent", "Use Gradient Descent optimization algorithm");
@@ -322,6 +379,14 @@ int main(int argc, char** argv)
     gd_sub->add_option("--max_iterations", gd_params.max_iterations,
                        "Maximum iterations for Gradient Descent optimizer");
     gd_sub->add_option("--tolerance", gd_params.tolerance, "Tolerance for Gradient Descent optimizer");
+    gd_sub->add_option("--kappa", gd_params.kappa, "Kappa");
+    gd_sub->add_option("--phi", gd_params.phi, "Phi");
+    gd_sub->add_option("--momentum", gd_params.momentum, "Momemtum");
+    gd_sub->add_option("--min_gain", gd_params.min_gain, "Minimum gain for Gradient Descent optimizer");
+    gd_sub
+        ->add_option("--gradient_delta", gradient_delta,
+                     "Gradient delta for Gradient Descent optimizer when optimizing filters")
+        ->default_val(1e-2);
 
     // CMAES
     CLI::App* cmaes_sub = app.add_subcommand("CMAES", "Use CMA-ES optimization algorithm");
@@ -343,6 +408,17 @@ int main(int argc, char** argv)
     app.require_subcommand(1);
     CLI11_PARSE(app, argc, argv);
 
+    if (colorless_only && spectrum_only)
+    {
+        LOG_ERROR(logger, "Cannot specify both --colorless_only and --spectrum_only flags.");
+        return -1;
+    }
+
+    if (verbose)
+    {
+        logger->set_log_level(quill::LogLevel::Debug);
+    }
+
     auto config_filename = app.get_config_ptr()->as<std::string>();
     LOG_INFO(logger, "Using configuration file: {}", config_filename);
 
@@ -350,11 +426,11 @@ int main(int argc, char** argv)
 
     std::string selected_optimizer;
 
-    if (app.got_subcommand("adam"))
+    if (app.got_subcommand("Adam"))
     {
         LOG_INFO(logger, "Using Adam optimization algorithm.");
         optimizer_params = adam_params;
-        selected_optimizer = "adam";
+        selected_optimizer = "Adam";
     }
     else if (app.got_subcommand("SPSA"))
     {
@@ -410,6 +486,108 @@ int main(int argc, char** argv)
         optimizer_params = random_search_params;
         selected_optimizer = "RandomSearch";
     }
+    else
+    {
+        LOG_ERROR(logger, "No valid optimization algorithm selected.");
+        return -1;
+    }
+
+    auto now = std::chrono::system_clock::now();
+    auto local_now = std::chrono::current_zone()->to_local(std::chrono::floor<std::chrono::seconds>(now));
+
+    std::string timestamp = std::format("{:%Y%m%d_%H%M%S}", local_now);
+    LOG_INFO(logger, "Optimization timestamp: {}", timestamp);
+
+    std::string output_dir_name = timestamp + "_" + selected_optimizer;
+
+    std::filesystem::path optim_subdir;
+
+    if (save_output)
+    {
+        optim_subdir = std::filesystem::path(output_dir) / output_dir_name;
+        std::filesystem::create_directory(optim_subdir);
+    }
+
+    auto initial_fdn_config = CreateInitialFDNConfig(fdn_order, randomize_initial, random_delays);
+
+    // if (fdn_order == 4)
+    // {
+    //     // Use initial config from Flamo
+    //     initial_fdn_config.input_gains = {0.826640184065362, 1.548645484436521, -1.722509600191682,
+    //     -0.424687671587977}; initial_fdn_config.output_gains = {-1.2573, 0.0205, -0.4804, 0.7020};
+    //     // std::vector<float> matrix_info = {-0.3845, -0.6639, -0.2398, 0.5949,  -0.8463, 0.1093, 0.4640,  -0.2379,
+    //     //                                   0.1689,  -0.7299, 0.1492,  -0.6453, -0.3279, 0.1203, -0.8396, -0.4161};
+    //     std::vector<float> matrix_info = {
+    //         -0.384471756224396, -0.846266824474135, 0.168901340948268,  -0.327850983658839,
+    //         -0.663902209517323, 0.109319992946154,  -0.729933688121898, 0.120332066736316,
+    //         -0.239838987397092, 0.464008574135751,  0.149227166433085,  -0.839585943219154,
+    //         0.594888716474000,  -0.237860555925574, -0.645290942729706, -0.416088175964784};
+    //     initial_fdn_config.matrix_info = matrix_info;
+    // }
+
+    if (save_output)
+    {
+        initial_fdn_config.attenuation_t60s = {3.f};
+        SaveImpulseResponse(initial_fdn_config, kSampleRate * 2.f, optim_subdir / "initial_ir.wav", logger);
+        WriteConfigToFile(initial_fdn_config, optim_subdir / "initial_fdn_config.txt", logger);
+    }
+
+    if (colorless_only || !spectrum_only)
+    {
+        LOG_INFO(logger, "Starting colorless optimization...");
+        fdn_optimization::OptimizationResult result;
+        result.best_loss = std::numeric_limits<float>::max();
+
+        for (auto i = 0u; i < 1; ++i)
+        {
+            LOG_INFO(logger, "Colorless optimization iteration {}/10", i + 1);
+            auto result_tmp =
+                OptimizeColorless(logger, initial_fdn_config, optimizer_params,
+                                  std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight),
+                                  gradient_delta, verbose);
+
+            if (result_tmp.best_loss < result.best_loss)
+            {
+                result = result_tmp;
+                // LOG_INFO(logger, "New best loss found: {:.6f}", result.best_loss);
+                // LOG_INFO(logger, "[Colorless] Final loss: {:.6f}", result.best_loss);
+                // LOG_INFO(logger, "[Colorless] Elapsed time: {:.4f} s", result.total_time.count());
+                // LOG_INFO(logger, "[Colorless] Total evaluations: {}", result.total_evaluations);
+            }
+            initial_fdn_config = CreateInitialFDNConfig(fdn_order, true, random_delays);
+        }
+
+        LOG_INFO(logger, "[Colorless] Final loss: {:.6f}", result.best_loss);
+        LOG_INFO(logger, "[Colorless] Elapsed time: {:.4f} s", result.total_time.count());
+        LOG_INFO(logger, "[Colorless] Total evaluations: {}", result.total_evaluations);
+
+        if (save_output)
+        {
+            WriteConfigToFile(result.optimized_fdn_config, optim_subdir / "colorless_fdn_config.txt", logger);
+
+            result.optimized_fdn_config.attenuation_t60s = {3.f};
+            SaveImpulseResponse(result.optimized_fdn_config, kSampleRate * 3.f, optim_subdir / "colorless_ir.wav",
+                                logger);
+            WriteLossHistoryToFile(result.loss_history, result.loss_names, optim_subdir / "colorless_loss_history.txt",
+                                   logger);
+        }
+
+        initial_fdn_config = result.optimized_fdn_config;
+    }
+
+    if (colorless_only)
+    {
+        LOG_INFO(logger, "Colorless-only optimization flag set. Exiting.");
+        return 0;
+    }
+
+    if (spectrum_only && fdn_order == 4)
+    {
+        LOG_INFO(logger, "Using predefined optimized matrix for spectrum optimization.");
+        initial_fdn_config.matrix_info = sfFDN::GenerateMatrix(4, sfFDN::ScalarMatrixType::Hadamard);
+        initial_fdn_config.input_gains = std::vector<float>(4, 0.5f);
+        initial_fdn_config.output_gains = std::vector<float>(4, 0.5f);
+    }
 
     std::vector<float> target_rir;
     if (!ir_filename.empty())
@@ -427,46 +605,29 @@ int main(int argc, char** argv)
         }
     }
 
-    auto now = std::chrono::system_clock::now();
-    // auto local_now = std::chrono::current_zone()->to_local(std::chrono::floor<std::chrono::seconds>(now));
+    auto result = OptimizeSpectrum(logger, initial_fdn_config, optimizer_params, target_rir,
+                                   std::make_tuple(edc_weight, mel_edr_weight), gradient_delta_filter, verbose);
+    LOG_INFO(logger, "[Spectrum] Final loss: {:.6f}", result.best_loss);
+    LOG_INFO(logger, "[Spectrum] Elapsed time: {:.4f} s", result.total_time.count());
+    LOG_INFO(logger, "[Spectrum] Total evaluations: {}", result.total_evaluations);
 
-    std::string timestamp = std::format("{:%Y%m%d_%H%M%S}", now);
-    LOG_INFO(logger, "Optimization timestamp: {}", timestamp);
-
-    std::string out_dir = timestamp + "_" + selected_optimizer;
-
-    std::filesystem::create_directory(output_dir);
-
-    std::filesystem::path optim_subdir = std::filesystem::path(output_dir) / out_dir;
-    std::filesystem::create_directory(optim_subdir);
-
-    auto initial_fdn_config = CreateInitialFDNConfig(fdn_order, randomize_initial);
-    auto result = OptimizeColorless(logger, initial_fdn_config, optimizer_params,
-                                    std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight));
-    LOG_INFO(logger, "Colorless optimization completed in {:.2f} s with {} evaluations.", result.total_time.count(),
-             result.total_evaluations);
-
-    WriteConfigToFile(result.initial_fdn_config, optim_subdir / "initial_fdn_config.txt", logger);
-    WriteConfigToFile(result.optimized_fdn_config, optim_subdir / "colorless_fdn_config.txt", logger);
-    SaveImpulseResponse(result.initial_fdn_config, kSampleRate * 3.f, optim_subdir / "colorless_initial_ir.wav",
-                        logger);
-    SaveImpulseResponse(result.optimized_fdn_config, kSampleRate * 3.f, optim_subdir / "colorless_ir.wav", logger);
-    WriteLossHistoryToFile(result.loss_history, result.loss_names, optim_subdir / "colorless_loss_history.txt", logger);
-    if (colorless_only)
+    if (save_output)
     {
-        LOG_INFO(logger, "Colorless-only optimization flag set. Exiting.");
-        return 0;
+        WriteConfigToFile(result.optimized_fdn_config, optim_subdir / "optimized_fdn_config.txt", logger);
+        WriteFilterConfigToFile(result.optimized_fdn_config, optim_subdir / "optimized_filter_config.txt", logger);
+        SaveImpulseResponse(result.initial_fdn_config, target_rir.size(), optim_subdir / "initial_ir.wav", logger);
+        SaveImpulseResponse(result.optimized_fdn_config, target_rir.size(), optim_subdir / "optimized_ir.wav", logger);
+        WriteLossHistoryToFile(result.loss_history, result.loss_names, optim_subdir / "loss_history.txt", logger);
+
+        std::filesystem::path target_rir_name_path = optim_subdir / "target_rir_name.txt";
+        std::ofstream file(target_rir_name_path, std::ios::out);
+        if (!file.is_open())
+        {
+            LOG_ERROR(logger, "Failed to open file {} for writing target RIR name.", target_rir_name_path.string());
+            return -1;
+        }
+        file << ir_filename << std::endl;
     }
-
-    result = OptimizeSpectrum(logger, result.optimized_fdn_config, target_rir);
-    LOG_INFO(logger, "Filter optimization completed in {:.2f} s with {} evaluations.", result.total_time.count(),
-             result.total_evaluations);
-
-    WriteConfigToFile(result.optimized_fdn_config, "optim_output/optimized_fdn_config.txt", logger);
-    WriteFilterConfigToFile(result.optimized_fdn_config, "optim_output/optimized_filter_config.txt", logger);
-    SaveImpulseResponse(result.initial_fdn_config, target_rir.size(), "optim_output/initial_ir.wav", logger);
-    SaveImpulseResponse(result.optimized_fdn_config, target_rir.size(), "optim_output/optimized_ir.wav", logger);
-    WriteLossHistoryToFile(result.loss_history, result.loss_names, "optim_output/loss_history.txt", logger);
 
     return 0;
 }

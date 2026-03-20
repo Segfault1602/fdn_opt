@@ -31,8 +31,9 @@ float MixingTimeLoss(std::span<const float> signal, uint32_t sample_rate, float 
 
 float SparsityLoss(std::span<const float> signal);
 
-float EDCLoss(std::span<const float> signal,
-              const std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands>& target_relief);
+// float EDCLoss(std::span<const float> signal,
+//   const std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands>& target_relief);
+float EDCLoss(std::span<const float> signal, const std::vector<float>& target_edc);
 
 float EDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
               const audio_utils::analysis::EnergyDecayReliefOptions& options);

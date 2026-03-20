@@ -7,6 +7,8 @@
 #include <quill/LogMacros.h>
 #include <quill/Logger.h>
 
+#include <armadillo>
+
 #include <filesystem>
 #include <fstream>
 

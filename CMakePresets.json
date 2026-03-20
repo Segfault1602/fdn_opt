@@ -14,7 +14,8 @@
             "binaryDir": "${sourceDir}/build/ninja",
             "cacheVariables": {
                 "CPM_audio_utils_SOURCE:": "${sourceDir}/../audio_utils",
-                "CPM_sfFDN_SOURCE:": "${sourceDir}/../sfFDN"
+                "CPM_sfFDN_SOURCE:": "${sourceDir}/../sfFDN",
+                "CPM_ensmallen_SOURCE:": "${sourceDir}/../ensmallen"
             }
         },
         {
@@ -32,7 +33,10 @@
             "binaryDir": "${sourceDir}/build/windows",
             "toolchainFile": "${sourceDir}/cmake/msvc-toolchain.cmake",
             "cacheVariables": {
-                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+                "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+                "CPM_audio_utils_SOURCE:": "${sourceDir}/../audio_utils",
+                "CPM_sfFDN_SOURCE:": "${sourceDir}/../sfFDN",
+                "CPM_ensmallen_SOURCE:": "${sourceDir}/../ensmallen"
             }
         }
     ],

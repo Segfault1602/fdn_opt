@@ -6,11 +6,44 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <queue>
 
 namespace
 {
 constexpr uint32_t kSampleRate = 48000;
 constexpr uint32_t kNBands = 10;
+
+namespace
+{
+static std::queue<std::vector<float>> gVectorPool;
+static std::mutex gVectorPoolMutex;
+std::vector<float> BorrowVector(size_t size)
+{
+    std::scoped_lock lock(gVectorPoolMutex);
+    if (!gVectorPool.empty())
+    {
+        auto vec = std::move(gVectorPool.front());
+        gVectorPool.pop();
+
+        if (vec.size() < size)
+        {
+            vec.resize(size, 0.0f);
+        }
+
+        return vec;
+    }
+    else
+    {
+        return std::vector<float>(size, 0.0f);
+    }
+}
+
+void ReturnVectorToPool(std::vector<float>&& vec)
+{
+    std::scoped_lock lock(gVectorPoolMutex);
+    gVectorPool.push(std::move(vec));
+}
+} // namespace
 
 // double Sigmoid(double x)
 // {
@@ -289,13 +322,16 @@ arma::mat GetRandomInitialParams(uint32_t fdn_order,
         break;
         case fdn_optimization::OptimizationParamType::AttenuationFilters:
         {
-            arma::mat t60s(1, kNBands, arma::fill::ones);
+            arma::mat t60s(1, kNBands, arma::fill::randn);
+            t60s = arma::abs(t60s);
+            t60s = arma::clamp(t60s, 0.1, 20.0);
             params = arma::join_horiz(params, t60s);
         }
         break;
         case fdn_optimization::OptimizationParamType::TonecorrectionFilters:
         {
-            arma::mat tc_gains(1, kNBands, arma::fill::zeros);
+            arma::mat tc_gains(1, kNBands, arma::fill::randn);
+            tc_gains *= 0.5; // start with small gains
             params = arma::join_horiz(params, tc_gains);
         }
         break;
@@ -350,7 +386,7 @@ arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig& config,
                 {
                     for (uint32_t c = 0; c < fdn_order; ++c)
                     {
-                        M(0, r * fdn_order + c) = static_cast<double>(matrix_coeffs[r * fdn_order + c]);
+                        M(0, c * fdn_order + r) = static_cast<double>(matrix_coeffs[r * fdn_order + c]);
                     }
                 }
             }
@@ -379,7 +415,9 @@ arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig& config,
         break;
         case fdn_optimization::OptimizationParamType::AttenuationFilters:
         {
-            arma::mat t60s(1, kNBands, arma::fill::ones);
+            arma::mat t60s(1, kNBands, arma::fill::randn);
+            t60s = arma::abs(t60s);
+            t60s = arma::clamp(t60s, 0.1, 20.0);
 
             if (config.attenuation_t60s.size() == kNBands)
             {
@@ -394,7 +432,8 @@ arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig& config,
         break;
         case fdn_optimization::OptimizationParamType::TonecorrectionFilters:
         {
-            arma::mat tc_gains(1, kNBands, arma::fill::zeros);
+            arma::mat tc_gains(1, kNBands, arma::fill::randn);
+            tc_gains *= 0.5; // start with small gains
             if (config.tc_gains.size() == kNBands)
             {
                 for (uint32_t i = 0; i < kNBands; ++i)
@@ -426,7 +465,6 @@ namespace fdn_optimization
 FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
                    std::span<const OptimizationParamType> param_types, GradientMethod gradient_method)
     : initial_config_(initial_config)
-    , current_config_(initial_config)
     , ir_size_(ir_size)
     , param_types_(param_types.begin(), param_types.end())
     , gradient_method_(gradient_method)
@@ -473,7 +511,6 @@ FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
         initial_config_.attenuation_t60s = {1.f};
         initial_config_.tc_gains.clear();
     }
-    current_config_ = initial_config_;
 
     // Check that we only have one type of matrix parameterization
     size_t matrix_param_count = 0;
@@ -550,48 +587,63 @@ arma::mat FDNModel::GetInitialParams() const
     return params;
 }
 
-void FDNModel::Setup(const arma::mat& params)
+std::vector<float> FDNModel::GenerateIR(const arma::mat& params)
 {
-    current_config_ = GetFDNConfig(params);
-}
+    // if (response_buffer_.size() < ir_size_)
+    // {
+    //     response_buffer_.resize(ir_size_);
+    // }
 
-std::span<const float> FDNModel::GenerateIR()
-{
-    if (response_buffer_.size() < ir_size_)
-    {
-        response_buffer_.resize(ir_size_);
-    }
+    // if (impulse_buffer_.size() < ir_size_)
+    // {
+    //     impulse_buffer_.resize(ir_size_);
+    // }
 
-    if (impulse_buffer_.size() < ir_size_)
-    {
-        impulse_buffer_.resize(ir_size_);
-    }
+    std::vector<float> impulse_buffer = BorrowVector(ir_size_);
 
-    std::ranges::fill(impulse_buffer_, 0.0f);
-    std::ranges::fill(response_buffer_, 0.0f);
+    std::vector<float> response_buffer = BorrowVector(ir_size_);
 
-    impulse_buffer_[0] = 1.0f; // Delta impulse
+    std::ranges::fill(impulse_buffer, 0.0f);
+    std::ranges::fill(response_buffer, 0.0f);
 
-    sfFDN::AudioBuffer in_buffer(impulse_buffer_);
-    sfFDN::AudioBuffer out_buffer(response_buffer_);
-    auto fdn = sfFDN::CreateFDNFromConfig(current_config_, kSampleRate);
+    impulse_buffer[0] = 1.0f; // Delta impulse
+
+    sfFDN::AudioBuffer in_buffer(impulse_buffer);
+    sfFDN::AudioBuffer out_buffer(response_buffer);
+    auto fdn = sfFDN::CreateFDNFromConfig(GetFDNConfig(params), kSampleRate);
     fdn->Process(in_buffer, out_buffer);
 
-    return std::span<const float>(response_buffer_);
+    ReturnVectorToPool(std::move(impulse_buffer));
+
+    return response_buffer;
 }
 
 double FDNModel::Evaluate(const arma::mat& params)
 {
-    Setup(params);
-    last_losses_.clear();
-    std::span<const float> ir = GenerateIR();
+    std::vector<float> ir = GenerateIR(params);
+
+    // // Add noise
+    // for (auto& sample : ir)
+    // {
+    //     sample += 1e-5f * static_cast<float>(arma::randn());
+    // }
 
     double total_loss = 0.0;
+    std::vector<double> last_losses;
     for (const auto& loss_function : loss_functions_)
     {
         double loss = loss_function.func(ir);
-        last_losses_.push_back(loss_function.weight * loss);
+        assert(!std::isnan(loss));
+        assert(!std::isinf(loss));
+        last_losses.push_back(loss_function.weight * loss);
         total_loss += loss_function.weight * loss;
+    }
+
+    ReturnVectorToPool(std::move(ir));
+
+#pragma omp critical
+    {
+        last_losses_ = std::move(last_losses);
     }
 
     return total_loss;
@@ -688,28 +740,35 @@ sfFDN::FDNConfig FDNModel::GetFDNConfig(const arma::mat& params) const
     return config;
 }
 
-void FDNModel::PrintFDNConfig(const arma::mat& params) const
+std::string FDNModel::PrintFDNConfig(const arma::mat& params) const
 {
     sfFDN::FDNConfig config = GetFDNConfig(params);
 
     arma::fvec input_gains_arma(config.input_gains.data(), config.N);
     arma::fvec output_gains_arma(config.output_gains.data(), config.N);
 
-    std::cout << "FDN Configuration:----------------------" << std::endl;
-    input_gains_arma.t().print("Input Gains:");
-    output_gains_arma.t().print("Output Gains:");
-    std::cout << "Delays: [";
+    std::stringstream ss;
+
+    ss << "FDN Configuration:----------------------" << std::endl;
+    ss << "Input Gains: " << std::endl;
+    ss << input_gains_arma.t() << std::endl;
+    ss << "Output Gains: " << std::endl;
+    ss << output_gains_arma.t() << std::endl;
+    ss << "Delays: [";
     for (const auto& delay : config.delays)
     {
-        std::cout << delay << " ";
+        ss << delay << " ";
     }
-    std::cout << "]" << std::endl;
+    ss << "]" << std::endl;
 
     std::vector<float> matrix_data = std::get<std::vector<float>>(config.matrix_info);
     arma::fmat matrix_data_arma(matrix_data.data(), config.N, config.N);
 
-    matrix_data_arma.print("Feedback Matrix:");
-    std::cout << "----------------------------------------" << std::endl;
+    ss << "Feedback Matrix:" << std::endl;
+    ss << matrix_data_arma << std::endl;
+    // matrix_data_arma.print("Feedback Matrix:");
+    ss << "----------------------------------------" << std::endl;
+    return ss.str();
 }
 
 void FDNModel::GradientCentralDifferences(const arma::mat& x, arma::mat& g)

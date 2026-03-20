@@ -38,6 +38,56 @@ void ReturnFFTToPool(std::unique_ptr<audio_utils::FFT> fft)
     std::scoped_lock lock(gFFTPoolMutex);
     gFFTPool.push_back(std::move(fft));
 }
+
+float L1Loss(std::span<const float> signal, std::span<const float> target)
+{
+    if (signal.size() != target.size())
+    {
+        throw std::runtime_error("L1Loss: Signal and target must have the same size.");
+    }
+
+    for (size_t i = 0; i < signal.size(); ++i)
+    {
+        if (std::isnan(signal[i]) || std::isinf(signal[i]))
+        {
+            throw std::runtime_error("L1Loss: Signal contains NaN or Inf values.");
+        }
+
+        if (std::isnan(target[i]) || std::isinf(target[i]))
+        {
+            throw std::runtime_error("L1Loss: Target contains NaN or Inf values.");
+        }
+    }
+
+    const arma::fvec signal_vec(const_cast<float*>(signal.data()), signal.size(), false, true);
+    const arma::fvec target_vec(const_cast<float*>(target.data()), target.size(), false, true);
+
+    auto diff = arma::sum(arma::abs(signal_vec - target_vec));
+    auto target_sum = arma::sum(arma::abs(target_vec));
+
+    assert(!std::isnan(diff));
+    assert(!std::isinf(diff));
+
+    assert(!std::isnan(target_sum));
+    assert(!std::isinf(target_sum));
+
+    return diff / target_sum;
+
+    // return arma::sum(arma::abs(signal_vec - target_vec)) / arma::sum(arma::abs(target_vec));
+}
+
+float L2Loss(std::span<const float> signal, std::span<const float> target)
+{
+    if (signal.size() != target.size())
+    {
+        throw std::runtime_error("L2Loss: Signal and target must have the same size.");
+    }
+
+    const arma::fvec signal_vec(const_cast<float*>(signal.data()), signal.size(), false, true);
+    const arma::fvec target_vec(const_cast<float*>(target.data()), target.size(), false, true);
+
+    return arma::sum(arma::square(signal_vec - target_vec)) / arma::sum(arma::square(target_vec));
+}
 } // namespace
 
 namespace fdn_optimization
@@ -57,7 +107,8 @@ float RMS(std::span<const float> signal)
 
 float SpectralFlatnessLoss(std::span<const float> signal)
 {
-    auto fft_ptr = BorrowFFTForSize(signal.size());
+    uint32_t fft_size = std::max(static_cast<uint32_t>(signal.size()), static_cast<uint32_t>(48000));
+    auto fft_ptr = BorrowFFTForSize(fft_size);
 
     std::vector<float> spectrum((fft_ptr->GetFFTSize() / 2) + 1, 0.0f);
     fft_ptr->ForwardMag(signal, std::span(spectrum),
@@ -143,33 +194,45 @@ float SparsityLoss(std::span<const float> signal)
     return l2_norm / l1_norm;
 }
 
-float EDCLoss(std::span<const float> signal,
-              const std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands>& target_relief)
+// float EDCLoss(std::span<const float> signal,
+//               const std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands>& target_relief)
+// {
+//     std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands> edc_result =
+//         audio_utils::analysis::EnergyDecayCurve_FilterBank(signal, false);
+
+//     float loss = 0.0f;
+
+//     constexpr float kDropLastPercent = 0.50f; // Drop last % of EDC to avoid tail artifacts
+
+//     for (auto&& [decay_curve, target_curve] : std::views::zip(edc_result, target_relief))
+//     {
+//         const size_t min_size = std::min(decay_curve.size(), target_curve.size());
+//         const size_t analysis_size = static_cast<size_t>(min_size * (1.0f - kDropLastPercent));
+
+//         auto decay_curve_span = std::span<float>(decay_curve).subspan(0, analysis_size);
+//         auto target_curve_span = std::span<const float>(target_curve).subspan(0, analysis_size);
+
+//         const arma::fvec decay_vec(decay_curve_span.data(), decay_curve_span.size(), false, true);
+//         const arma::fvec target_vec(const_cast<float*>(target_curve_span.data()), target_curve_span.size(), false,
+//                                     true);
+
+//         float curve_loss = arma::mean(arma::square(decay_vec - target_vec));
+//         loss += curve_loss;
+//     }
+
+//     return std::sqrt(loss);
+// }
+
+float EDCLoss(std::span<const float> signal, const std::vector<float>& target_edc)
 {
-    std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands> edc_result =
-        audio_utils::analysis::EnergyDecayCurve_FilterBank(signal, false);
+    auto edc = audio_utils::analysis::EnergyDecayCurve(signal, false);
 
-    float loss = 0.0f;
-
-    constexpr float kDropLastPercent = 0.50f; // Drop last % of EDC to avoid tail artifacts
-
-    for (auto&& [decay_curve, target_curve] : std::views::zip(edc_result, target_relief))
+    if (edc.size() != target_edc.size())
     {
-        const size_t min_size = std::min(decay_curve.size(), target_curve.size());
-        const size_t analysis_size = static_cast<size_t>(min_size * (1.0f - kDropLastPercent));
-
-        auto decay_curve_span = std::span<float>(decay_curve).subspan(0, analysis_size);
-        auto target_curve_span = std::span<const float>(target_curve).subspan(0, analysis_size);
-
-        const arma::fvec decay_vec(decay_curve_span.data(), decay_curve_span.size(), false, true);
-        const arma::fvec target_vec(const_cast<float*>(target_curve_span.data()), target_curve_span.size(), false,
-                                    true);
-
-        float curve_loss = arma::mean(arma::square(decay_vec - target_vec));
-        loss += curve_loss;
+        throw std::runtime_error("EDCLoss: EDC result size does not match target size.");
     }
 
-    return std::sqrt(loss);
+    return L2Loss(edc, target_edc);
 }
 
 float EDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
@@ -183,9 +246,11 @@ float EDRLoss(std::span<const float> signal, const audio_utils::analysis::Energy
         throw std::runtime_error("EDRLoss: EDR result size does not match target size.");
     }
 
-    const arma::fvec edr_vec(edr_result.data.data(), edr_result.data.size(), false, true);
-    const arma::fvec target_vec(const_cast<float*>(target_edr.data.data()), target_edr.data.size(), false, true);
-    float loss = arma::mean(arma::square(edr_vec - target_vec));
-    return std::sqrt(loss);
+    // Mezza et al. loss
+    return L1Loss(edr_result.data, target_edr.data);
+
+    // St-Onge loss
+    // float loss = arma::mean(arma::square(edr_vec - target_vec));
+    // return std::sqrt(loss);
 }
 } // namespace fdn_optimization

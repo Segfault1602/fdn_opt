@@ -67,29 +67,29 @@ class OptimCallback
             }
         }
 
-        if constexpr (std::is_same_v<OptimizerType, ens::DE>)
-        {
-            if (de_pop_size_ > 0)
-            {
-                if (objective < de_best_objective_)
-                {
-                    de_best_objective_ = objective;
-                    de_best_params_ = iterate;
-                }
-                // For DE, there is no easy way to get the best objective per generation so we have to keep track of
-                // it manually.
-                ++de_pop_evals_;
-                if (de_pop_evals_ == de_pop_size_ * 2) // Each generation evaluates 2 * population size
-                {
-                    de_pop_evals_ = 0;
-                    function.Evaluate(de_best_params_);
-                    SaveLossHistory(function, de_best_objective_);
-                    de_best_objective_ = std::numeric_limits<double>::max();
-                    de_best_params_.zeros();
-                }
-            }
-        }
-        else if constexpr (std::is_same_v<OptimizerType, ens::CNE>)
+        // if constexpr (std::is_same_v<OptimizerType, ens::DE>)
+        // {
+        //     if (de_pop_size_ > 0)
+        //     {
+        //         if (objective < de_best_objective_)
+        //         {
+        //             de_best_objective_ = objective;
+        //             de_best_params_ = iterate;
+        //         }
+        //         // For DE, there is no easy way to get the best objective per generation so we have to keep track of
+        //         // it manually.
+        //         ++de_pop_evals_;
+        //         if (de_pop_evals_ == de_pop_size_ * 2) // Each generation evaluates 2 * population size
+        //         {
+        //             de_pop_evals_ = 0;
+        //             function.Evaluate(de_best_params_);
+        //             SaveLossHistory(function, de_best_objective_);
+        //             de_best_objective_ = std::numeric_limits<double>::max();
+        //             de_best_params_.zeros();
+        //         }
+        //     }
+        // }
+        if constexpr (std::is_same_v<OptimizerType, ens::CNE>)
         {
             if (de_pop_size_ > 0)
             {
@@ -144,7 +144,8 @@ class OptimCallback
         step_was_taken_ = true;
 
         if constexpr (std::is_same_v<OptimizerType, ens::SA<ens::ExponentialSchedule>> ||
-                      std::is_same_v<OptimizerType, ens::LBestPSO> || std::is_same_v<OptimizerType, ens::L_BFGS> ||
+                      std::is_same_v<OptimizerType, ens::DE> || std::is_same_v<OptimizerType, ens::LBestPSO> ||
+                      std::is_same_v<OptimizerType, ens::L_BFGS> ||
                       std::is_same_v<OptimizerType, ens::GradientDescent> ||
                       is_same_template_v<OptimizerType, ens::GradientDescentType<>> ||
                       is_same_template_v<OptimizerType, ens::CMAES<>> ||
@@ -212,6 +213,23 @@ struct OptimizationVisitor
     OptimCallback* optim_callback;
     const OptimizationInfo& info;
     quill::Logger* logger;
+    bool verbose;
+
+    template <typename OptimizerType>
+    void DoOptimize(OptimizerType& optimizer)
+    {
+        ens::StoreBestCoordinates<arma::mat> store_best;
+
+        if (verbose)
+        {
+            optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
+        }
+        else
+        {
+            optimizer.Optimize(model, params, store_best, *optim_callback);
+        }
+        params = store_best.BestCoordinates();
+    }
 
     void operator()(AdamParameters& adam_params)
     {
@@ -220,78 +238,81 @@ struct OptimizationVisitor
         optim_callback->decay_step_size_ = adam_params.decay_step_size;
         optim_callback->max_restarts_ = adam_params.max_restarts;
 
-        LOG_INFO(logger,
-                 "Starting Adam optimization with step size: {}, learning rate decay: {}, decay step size: {}, "
-                 "epoch restarts: {}, max restarts: {}, tolerance: {}",
-                 adam_params.step_size, adam_params.learning_rate_decay, adam_params.decay_step_size,
-                 adam_params.epoch_restarts, adam_params.max_restarts, adam_params.tolerance);
+        LOG_INFO(logger, "Starting Adam optimization with step size: {}, beta1: {}, beta2: {}, tolerance: {}",
+                 adam_params.step_size, adam_params.beta1, adam_params.beta2, adam_params.tolerance);
 
-        ens::Adam optimizer(adam_params.step_size, 1, 0.9, 0.999, 1e-8, 1e6, adam_params.tolerance, false, true, true);
-
-        ens::StoreBestCoordinates<arma::mat> store_best;
-        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
-
-        params = store_best.BestCoordinates();
+        ens::Adam optimizer(adam_params.step_size, 1, adam_params.beta1, adam_params.beta2, 1e-8, 1e6,
+                            adam_params.tolerance, false, true, true);
+        DoOptimize(optimizer);
     }
 
     void operator()(SPSAParameters& spsa_params)
     {
+        LOG_INFO(logger,
+                 "Starting SPSA optimization with alpha: {}, gamma: {}, step size: {}, evaluation step size: {}, "
+                 "max iterations: {}, tolerance: {}",
+                 spsa_params.alpha, spsa_params.gamma, spsa_params.step_size, spsa_params.evaluationStepSize,
+                 spsa_params.max_iterations, spsa_params.tolerance);
         ens::SPSA optimizer(spsa_params.alpha, spsa_params.gamma, spsa_params.step_size, spsa_params.evaluationStepSize,
                             spsa_params.max_iterations, spsa_params.tolerance);
 
-        ens::StoreBestCoordinates<arma::mat> store_best;
-        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
-
-        params = store_best.BestCoordinates();
+        DoOptimize(optimizer);
     }
 
     void operator()(SimulatedAnnealingParameters& p)
     {
+        LOG_INFO(logger,
+                 "Starting Simulated Annealing optimization with initial temperature: {}, max iterations: {}, init "
+                 "moves: {}, move control sweep: {}, max tolerance sweep: {}, max move coefficient: {}, init move "
+                 "coefficient: {}, gain: {}, tolerance: {}",
+                 p.initial_temperature, p.max_iterations, p.init_moves, p.move_ctrl_sweep, p.max_tolerance_sweep,
+                 p.max_move_coef, p.init_move_coef, p.gain, p.tolerance);
         ens::SA optimizer(ens::ExponentialSchedule(), p.max_iterations, p.initial_temperature, p.init_moves,
-                          p.move_ctrl_sweep, 1e-5, p.max_tolerance_sweep, p.max_move_coef, p.init_move_coef, p.gain);
+                          p.move_ctrl_sweep, p.tolerance, p.max_tolerance_sweep, p.max_move_coef, p.init_move_coef,
+                          p.gain);
 
-        ens::StoreBestCoordinates<arma::mat> store_best;
-        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
-
-        params = store_best.BestCoordinates();
+        DoOptimize(optimizer);
     }
 
     void operator()(CNEParameters& p)
     {
+        LOG_INFO(logger,
+                 "Starting CNE optimization with population size: {}, max generations: {}, mutation probability: {}, "
+                 "mutation size: {}, select percent: {}, tolerance: {}",
+                 p.population_size, p.max_generations, p.mutation_probability, p.mutation_size, p.select_percent,
+                 p.tolerance);
+
         optim_callback->de_pop_size_ = static_cast<int>(p.population_size);
         ens::CNE optimizer(p.population_size, p.max_generations, p.mutation_probability, p.mutation_size,
                            p.select_percent, p.tolerance);
 
-        ens::StoreBestCoordinates<arma::mat> store_best;
-        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
-
-        params = store_best.BestCoordinates();
+        DoOptimize(optimizer);
     }
 
     void operator()(DifferentialEvolutionParameters& p)
     {
+        LOG_INFO(logger,
+                 "Starting Differential Evolution optimization with population size: {}, max generation: {}, crossover "
+                 "rate: {}, differential weight: {}, tolerance: {}",
+                 p.population_size, p.max_generation, p.crossover_rate, p.differential_weight, p.tolerance);
         optim_callback->de_pop_size_ = static_cast<int>(p.population_size);
         ens::DE optimizer(p.population_size, p.max_generation, p.crossover_rate, p.differential_weight, p.tolerance);
 
-        ens::StoreBestCoordinates<arma::mat> store_best;
-        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
-
-        params = store_best.BestCoordinates();
+        DoOptimize(optimizer);
     }
 
     void operator()(PSOParameters& p)
     {
-        ens::LBestPSO optimizer(p.num_particles, -1.0, 1.0, p.max_iterations, p.horizon_size, 1e-5,
+        LOG_INFO(logger,
+                 "Starting PSO optimization with num particles: {}, max iterations: {}, horizon size: {}, "
+                 "exploitation factor: {}, exploration factor: {}, tolerance: {}",
+                 p.num_particles, p.max_iterations, p.horizon_size, p.exploitation_factor, p.exploration_factor,
+                 p.tolerance);
+
+        ens::LBestPSO optimizer(p.num_particles, -1.0, 1.0, p.max_iterations, p.horizon_size, p.tolerance,
                                 p.exploitation_factor, p.exploration_factor);
 
-        ens::StoreBestCoordinates<arma::mat> store_best;
-        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
-
-        // params = store_best.BestCoordinates();
-        if (!arma::approx_equal(params, store_best.BestCoordinates(), "absdiff", 1e-5))
-        {
-            std::cout << "Mismatch in best coordinates!" << std::endl;
-        }
+        DoOptimize(optimizer);
     }
 
     void operator()(RandomSearchParameters& p)
@@ -319,43 +340,43 @@ struct OptimizationVisitor
         ens::L_BFGS optimizer(p.num_basis, p.max_iterations, kArmijoConstant, p.wolfe, p.min_gradient_norm, p.factor,
                               p.max_line_search_trials, p.min_step, p.max_step);
 
-        ens::StoreBestCoordinates<arma::mat> store_best;
-        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
-
-        params = store_best.BestCoordinates();
+        DoOptimize(optimizer);
     }
 
     void operator()(GradientDescentParameters& p)
     {
+        LOG_INFO(logger,
+                 "Starting Gradient Descent optimization with step size: {}, max iterations: {}, tolerance: {}, kappa: "
+                 "{}, phi: {}, momentum: {}, min gain: {}",
+                 p.step_size, p.max_iterations, p.tolerance, p.kappa, p.phi, p.momentum, p.min_gain);
         // ens::SGD optimizer(p.step_size, 1, p.max_iterations, p.tolerance, false);
-        constexpr double kappa = 0.2;
-        constexpr double phi = 0.8;
-        constexpr double momentum = 0.5;
-        constexpr double minGain = 1e-8;
-        ens::MomentumDeltaBarDelta optimizer(p.step_size, p.max_iterations, p.tolerance, kappa, phi, momentum, minGain,
-                                             false);
+        ens::MomentumDeltaBarDelta optimizer(p.step_size, p.max_iterations, p.tolerance, p.kappa, p.phi, p.momentum,
+                                             p.min_gain, false);
 
-        ens::StoreBestCoordinates<arma::mat> store_best;
-        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
-
-        params = store_best.BestCoordinates();
+        DoOptimize(optimizer);
     }
 
     void operator()(CMAESParameters& p)
     {
+        LOG_INFO(logger,
+                 "Starting CMA-ES optimization with population size: {}, max iterations: {}, tolerance: {}, step size: "
+                 "{}",
+                 p.population_size, p.max_iterations, p.tolerance, p.step_size);
         ens::BoundaryBoxConstraint b(-1.0, 1.0);
-        ens::BIPOP_CMAES optimizer(p.population_size, ens::EmptyTransformation<>(), 1, p.max_iterations, p.tolerance, ens::FullSelection(),
-                                   p.step_size, 3, 3, 1e6);
+        // ens::BIPOP_CMAES optimizer(p.population_size, ens::EmptyTransformation<>(), 1, p.max_iterations, p.tolerance,
+        //                            ens::FullSelection(), p.step_size, 3, 3, 1e6);
+        // ens::IPOP_CMAES optimizer(p.population_size, b, 1, p.max_iterations, p.tolerance, ens::FullSelection(),
+        //                           p.step_size, 5, 2.0, 1e6);
+        ens::ActiveCMAES optimizer(p.population_size, b, 1, p.max_iterations, p.tolerance, ens::FullSelection(),
+                                   p.step_size);
 
-        ens::StoreBestCoordinates<arma::mat> store_best;
-        optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
-
-        params = store_best.BestCoordinates();
+        DoOptimize(optimizer);
     }
 };
 
-FDNOptimizer::FDNOptimizer(quill::Logger* logger)
+FDNOptimizer::FDNOptimizer(quill::Logger* logger, bool verbose)
     : logger_(logger)
+    , verbose_(verbose)
     , status_(OptimizationStatus::Ready)
 {
 }
@@ -374,7 +395,7 @@ void FDNOptimizer::StartOptimization(OptimizationInfo& info)
     auto current_status = status_.load();
     if (current_status == OptimizationStatus::Running || current_status == OptimizationStatus::StartRequested)
     {
-        LOG_INFO(logger_, "Optimization is already running.");
+        LOG_WARNING(logger_, "Optimization is already running.");
         return; // Already running
     }
 
@@ -393,7 +414,7 @@ void FDNOptimizer::CancelOptimization()
 {
     if (status_.load() != OptimizationStatus::Running)
     {
-        LOG_INFO(logger_, "Optimization is not running.");
+        LOG_WARNING(logger_, "Optimization is not running.");
         return; // Not running
     }
 
@@ -471,44 +492,46 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
 
     FDNModel model(info.initial_fdn_config, info.ir_size, info.parameters_to_optimize, info.gradient_method);
     model.SetGradientDelta(info.gradient_delta);
+    LOG_INFO(logger_, "Gradient method: {}, Gradient delta: {}",
+             info.gradient_method == GradientMethod::CentralDifferences ? "Central Differences" : "Forward Differences",
+             info.gradient_delta);
 
     std::vector<LossFunction> loss_functions;
 
     if (optimizing_filters)
     {
-        // std::vector<float> time_data(target_edc_octaves[0].size());
-        // for (size_t i = 0; i < time_data.size(); ++i)
-        // {
-        //     time_data[i] = static_cast<float>(i) * (1.0f / 48000.0f); // assuming 48kHz sample rate
-        // }
-
-        // std::vector<float> estimated_t60s;
-        // for (const auto& edc_octave : target_edc_octaves)
-        // {
-        //     auto t60_results = fdn_analysis::EstimateT60(edc_octave, time_data, -5.0f, -15.0f);
-        //     estimated_t60s.push_back(t60_results.t60);
-        //     LOG_INFO(logger_, "Estimated T60: {:.2f} s", t60_results.t60);
-        // }
-
         if (info.edc_weight > 0.0)
         {
-            auto target_edc_octaves = audio_utils::analysis::EnergyDecayCurve_FilterBank(info.target_rir, true);
-            // use shared_ptr to capture in lambda
-            auto target_edc_octaves_ptr =
-                std::make_shared<std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands>>(
-                    std::move(target_edc_octaves));
+            LOG_INFO(logger_, "Adding EDC loss with weight {}", info.edc_weight);
+            // auto target_edc_octaves = audio_utils::analysis::EnergyDecayCurve_FilterBank(info.target_rir, true);
+            // // use shared_ptr to capture in lambda
+            // auto target_edc_octaves_ptr =
+            //     std::make_shared<std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands>>(
+            //         std::move(target_edc_octaves));
+
+            // LossFunction edc_loss;
+            // edc_loss.func = [target_edc_octaves_ptr](std::span<const float> signal) -> double {
+            //     return EDCLoss(signal, *target_edc_octaves_ptr);
+            // };
+            // edc_loss.weight = 1.0;
+            // edc_loss.name = "EDC Relief Loss";
+            // loss_functions.push_back(edc_loss);
+
+            auto target_edc = audio_utils::analysis::EnergyDecayCurve(info.target_rir, false);
+            auto target_edc_ptr = std::make_shared<std::vector<float>>(std::move(target_edc));
 
             LossFunction edc_loss;
-            edc_loss.func = [target_edc_octaves_ptr](std::span<const float> signal) -> double {
-                return EDCLoss(signal, *target_edc_octaves_ptr);
+            edc_loss.func = [target_edc_ptr](std::span<const float> signal) -> double {
+                return EDCLoss(signal, *target_edc_ptr);
             };
-            edc_loss.weight = 1.0;
-            edc_loss.name = "EDC Relief Loss";
+            edc_loss.weight = info.edc_weight;
+            edc_loss.name = "EDC Loss";
             loss_functions.push_back(edc_loss);
         }
 
         if (info.mel_edr_weight > 0.0)
         {
+            LOG_INFO(logger_, "Adding Mel EDR loss with weight {}", info.mel_edr_weight);
             audio_utils::analysis::EnergyDecayReliefOptions edr_options;
             edr_options.fft_length = info.mel_edr_fft_length;
             edr_options.hop_size = info.mel_edr_hop_size;
@@ -525,7 +548,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
             edr_loss.func = [target_edr_result_ptr, edr_options](std::span<const float> signal) -> double {
                 return EDRLoss(signal, *target_edr_result_ptr, edr_options);
             };
-            edr_loss.weight = 1.0;
+            edr_loss.weight = info.mel_edr_weight;
             edr_loss.name = "EDR Loss";
             loss_functions.push_back(edr_loss);
         }
@@ -575,18 +598,29 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     model.SetLossFunctions(loss_functions);
 
     arma::mat params = model.GetInitialParams();
+    // LOG_INFO(logger_, "Initial config:");
+    // logger_->set_immediate_flush(1);
+    // model.PrintFDNConfig(params);
+    // std::stringstream param_stream;
+    // param_stream << params;
+    // LOG_INFO(logger_, "Initial parameters: {}", param_stream.str());
 
-    double initial_loss = model.Evaluate(params);
-    LOG_INFO(logger_, "Initial loss: {}", initial_loss);
     sfFDN::FDNConfig initial_config = model.GetFDNConfig(params);
 
     optim_callback_ = std::make_unique<OptimCallback>(stop_token);
 
-    OptimizationVisitor visitor{params, model, optim_callback_.get(), info, logger_};
+    OptimizationVisitor visitor{params, model, optim_callback_.get(), info, logger_, verbose_};
     std::visit(visitor, info.optimizer_params);
 
     double final_loss = model.Evaluate(params);
-    LOG_INFO(logger_, "Final loss: {}", final_loss);
+    std::string final_config_str = model.PrintFDNConfig(params);
+    LOG_INFO(logger_, "Final config:\n{}", final_config_str);
+    // param_stream.str("");
+    // param_stream << params;
+    // LOG_INFO(logger_, "Optimization finished. Final parameters: {}", param_stream.str());
+    // LOG_INFO(logger_, "Final loss: {:.6f}", final_loss);
+    // LOG_INFO(logger_, "Final config:");
+    // model.PrintFDNConfig(params);
 
     {
         std::scoped_lock lock(mutex_);
@@ -612,7 +646,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     if (current_status == OptimizationStatus::CancelRequested)
     {
         status_.store(OptimizationStatus::Canceled);
-        LOG_INFO(logger_, "Optimization was canceled.");
+        LOG_WARNING(logger_, "Optimization was canceled.");
         return;
     }
 

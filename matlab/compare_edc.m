@@ -2,9 +2,40 @@ clearvars;close all;
 addpath(genpath("../../FDNToolbox"));
 addpath(genpath("../../DecayFitNet"));
 
-[target_ir, target_fs] = audioread("../../rirs/py_rirs/rir_dining_room.wav");
-[init_ir, init_fs] = audioread('../optim_output/initial_ir.wav');
-[opt_ir, opt_fs] = audioread('../optim_output/optimized_ir.wav');
+OUT_DIR = "../optim_output";
+
+RESULTS = dir(OUT_DIR);
+
+% Ignore "." and ".."  
+RESULTS = RESULTS(3:end);
+
+RESULTS = RESULTS([RESULTS.isdir]);
+[~,idx] = sort([RESULTS.datenum]);
+RESULTS = RESULTS(idx);
+
+
+LATEST_DIR = RESULTS(end);
+
+INIT_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "initial_ir.wav");
+OPTIM_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "optimized_ir.wav");
+OPTIM_LOSS = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "loss_history.txt");
+OPTIM_FILTER = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "optimized_filter_config.txt");
+TARGET_RIR_NAME = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "target_rir_name.txt");
+
+rir_name = readlines(TARGET_RIR_NAME);
+rir_name = fullfile("..", rir_name{1});
+
+fprintf("Latest:   %s\n", LATEST_DIR.name);
+
+[target_ir, target_fs] = audioread(rir_name);
+[init_ir, init_fs] = audioread(INIT_IR);
+[opt_ir, opt_fs] = audioread(OPTIM_IR);
+
+if target_fs ~= init_fs
+    [p,q] = rat(opt_fs/target_fs);
+    target_ir = resample(target_ir,p,q );
+    target_fs = opt_fs;
+end
 
 % opt_ir(500)= 0.5;
 
@@ -35,13 +66,13 @@ hold off;
 title("Energy Decay Curve");
 legend;
 
-oct_bank = octaveFilterBank("1 octave", SampleRate=target_fs);
+oct_bank = octaveFilterBank("1 octave", SampleRate=target_fs, FrequencyRange=[52, 16000]);
 
 target_filtered = oct_bank(target_ir);
 oct_bank.reset();
 opt_filtered = oct_bank(opt_ir);
 
-filter_freqs = round(oct_bank.getCenterFrequencies);
+filter_freqs = (oct_bank.getCenterFrequencies);
 
 % target_filtered = RemoveBeginningSilence(target_filtered);
 % opt_filtered = RemoveBeginningSilence(opt_filtered);
@@ -54,23 +85,56 @@ opt_edr = EDC(opt_filtered);
 
 figure(3);
 
-cmap = lines(size(target_edr,2));
+cmap = orderedcolors('gem12');
 
+t = 0:size(opt_edr,1)-1;
+t = t / opt_fs;
+t = t';
+
+tile = tiledlayout(3,3, TileSpacing="compact", Padding="compact");
+axes = [];
 for n = 1:9
-    subplot(3,3,n);
-    target_label = sprintf("Target - %d", filter_freqs(n));
-    plot(target_edr(:,n),"--",  Color=cmap(n,:), DisplayName=target_label);
+    axes(n) = nexttile;
+    
+    if filter_freqs(n) < 1000
+        freq_string = sprintf("%.0f Hz", round(filter_freqs(n),2,"significant"));
+    else
+        freq_string = sprintf("%.1f kHz", filter_freqs(n)/1000);
+    end
+
+    target_label = sprintf("Target - %s", freq_string);
+    plot(t, target_edr(:,n), "--",  Color=cmap(n,:), DisplayName="Target RIR");
     hold on;
-    plot(opt_edr(:,n), Color=cmap(n,:), DisplayName=sprintf("Opt - %d", filter_freqs(n)))
+    plot(t, opt_edr(:,n), Color=cmap(n,:), DisplayName="Optimized FDN");
     hold off;
     legend;
-    ylim([-100 10]);
+    title(freq_string);
+    grid on;
+    ylabel([]);
+    xlabel([]);
+    yticks(-140:20:0);
+
+    if n < 7
+        xticklabels([]);
+    end
+
+    if any([2 3 5 6 8 9] == n)
+        yticklabels([])
+    end
 end
 
-hold on;
-plot(target_edr(:,10),"--",  Color=cmap(10,:), DisplayName=sprintf("Target - %d", filter_freqs(10)));
-plot(opt_edr(:,10), Color=cmap(10,:), DisplayName=sprintf("Opt - %d", filter_freqs(10)))
-hold off;
+
+xlabel(tile, "Time (s)");
+ylabel(tile, "EDC (dB)");
+ylim([-150 0]);
+linkaxes(axes, "xy");
+ylim([-140 0]);
+
+
+% hold on;
+% plot(target_edr(:,10),"--",  Color=cmap(10,:), DisplayName=sprintf("Target - %d", filter_freqs(10)));
+% plot(opt_edr(:,10), Color=cmap(10,:), DisplayName=sprintf("Opt - %d", filter_freqs(10)))
+% hold off;
 
 legend;
 
@@ -78,12 +142,12 @@ legend;
 
 figure(5);
 
-n_fft = 1024;
-hop_size = 512;
+n_fft = 4096;
+hop_size = 128;
 win_size = 1024;
 ovl_len = win_size - hop_size;
 win = hann(win_size);
-n_mels = 16;
+n_mels = 132;
 
 subplot(311);
 % pspectrum(target_ir, target_fs, "spectrogram");
@@ -106,11 +170,12 @@ title("Optimized Impulse Response Spectrogram");
 colorbar;
 
 subplot(313);
-S_err = (S_db - oS_db);
+S_err = abs(S_db - oS_db);
 surf(oT, oF, S_err, EdgeColor='none');
 view([0,90]);
 axis([oT(1) oT(end) oF(1) oF(end)])
 title("Error");
+clim([0 20]);
 colorbar;
 
 figure(6);
@@ -145,7 +210,7 @@ colorbar;
 
 
 figure(7);
-losses = readtable("../optim_output/loss_history.txt", "VariableNamingRule","preserve");
+losses = readtable(OPTIM_LOSS, "VariableNamingRule","preserve");
 total_loss = losses{:,1};
 plot(total_loss, DisplayName=losses.Properties.VariableNames{1});
 hold on;
@@ -159,7 +224,7 @@ legend();
 figure(8);
 
 
-filter_mat = readmatrix("../optim_output/optimized_filter_config.txt");
+filter_mat = readmatrix(OPTIM_FILTER);
 fdn_t60s = filter_mat(1,:);
 fdn_freqs = filter_mat(2, :);
 fdn_tc_gains = filter_mat(3,:);
@@ -182,6 +247,7 @@ plot(decayFitNet_Freqs, tVals_optimized, DisplayName="Optimized - DecayFitNet");
 hold off;
 legend();
 grid();
+ylim([0 1.5*max([fdn_t60s(:); tVals_decayfitnet(:);tVals_optimized(:)])]);
 
 
 

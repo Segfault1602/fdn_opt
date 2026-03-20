@@ -8,6 +8,7 @@
 #include "optim_types.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace fdn_optimization
 {
@@ -36,9 +37,7 @@ class FDNModel
 
     arma::mat GetInitialParams() const;
 
-    std::span<const float> GenerateIR();
-
-    void Setup(const arma::mat& params);
+    std::vector<float> GenerateIR(const arma::mat& params);
 
     double Evaluate(const arma::mat& params);
     double Evaluate(const arma::mat& params, const size_t i, const size_t batch_size);
@@ -48,7 +47,7 @@ class FDNModel
 
     sfFDN::FDNConfig GetFDNConfig(const arma::mat& params) const;
 
-    void PrintFDNConfig(const arma::mat& params) const;
+    std::string PrintFDNConfig(const arma::mat& params) const;
 
     size_t NumFunctions() const
     {
@@ -64,7 +63,6 @@ class FDNModel
 
   private:
     sfFDN::FDNConfig initial_config_;
-    sfFDN::FDNConfig current_config_;
     uint32_t ir_size_;
     std::vector<float> impulse_buffer_;
     std::vector<float> response_buffer_;
