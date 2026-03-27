@@ -209,6 +209,7 @@ struct OptimizationInfo
     uint32_t mel_edr_num_bands = 64;
 
     std::vector<float> target_rir;
+    std::vector<float> early_fir;
 
     OptimizationAlgoParams optimizer_params;
 };

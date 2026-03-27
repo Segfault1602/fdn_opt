@@ -266,7 +266,8 @@ inline void WriteFilterConfigToFile(const sfFDN::FDNConfig& config, const std::f
 }
 
 inline void SaveImpulseResponse(const sfFDN::FDNConfig& config, uint32_t ir_length,
-                                const std::filesystem::path& filename, quill::Logger* logger)
+                                const std::filesystem::path& filename, quill::Logger* logger,
+                                const std::vector<float>& early_fir = {})
 {
     auto config_copy = config;
     // config_copy.attenuation_t60s = {1.f};
@@ -275,7 +276,15 @@ inline void SaveImpulseResponse(const sfFDN::FDNConfig& config, uint32_t ir_leng
     fdn->SetDirectGain(0.0f);
 
     std::vector<float> input_data(ir_length, 0.0f);
-    input_data[0] = 1.0f; // Delta impulse
+
+    if (early_fir.empty())
+    {
+        input_data[0] = 1.0f; // Delta impulse
+    }
+    else
+    {
+        std::copy(early_fir.begin(), early_fir.end(), input_data.begin());
+    }
 
     std::vector<float> impulse_response(ir_length, 0.0f);
     sfFDN::AudioBuffer impulse_buffer(impulse_response);

@@ -156,6 +156,7 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                 .sparsity_weight = std::get<1>(loss_weights),
                                                 .power_envelope_weight = std::get<2>(loss_weights),
                                                 .target_rir = {},
+                                                .early_fir = {},
                                                 .optimizer_params = optimizer_params};
 
     fdn_optimization::FDNOptimizer optimizer(logger, verbose);
@@ -188,14 +189,16 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
 fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, const sfFDN::FDNConfig& initial_fdn_config,
                                                       const fdn_optimization::OptimizationAlgoParams&,
                                                       const std::vector<float>& target_rir,
-                                                      const std::tuple<double, double>& loss_weights, bool verbose)
+                                                      const std::vector<float>& early_fir,
+                                                      const std::tuple<double, double, double>& loss_weights,
+                                                      bool verbose)
 {
     fdn_optimization::AdamParameters opt_params{.step_size = 0.1,
                                                 .learning_rate_decay = 1.0,
                                                 .decay_step_size = 1,
                                                 .epoch_restarts = 180,
                                                 .max_restarts = 0,
-                                                .tolerance = 1e-4,
+                                                .tolerance = 1e-3,
                                                 .gradient_delta = 1e-1};
 
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::AttenuationFilters,
@@ -208,7 +211,9 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
                                                 .edc_weight = std::get<0>(loss_weights),
                                                 .mel_edr_weight = std::get<1>(loss_weights),
+                                                .weighted_edr_weight = std::get<2>(loss_weights),
                                                 .target_rir = target_rir,
+                                                .early_fir = early_fir,
                                                 .optimizer_params = opt_params};
 
     fdn_optimization::FDNOptimizer optimizer(logger, verbose);
@@ -252,14 +257,15 @@ int main(int argc, char** argv)
     std::string ir_filename;
     app.add_option("-i,--ir", ir_filename, "Path to target RIR WAV file")->check(CLI::ExistingFile);
 
+    std::string early_fir_path;
+    app.add_option("--early_fir_path", early_fir_path, "Path to early reflection FIR WAV file")
+        ->check(CLI::ExistingFile);
+
     uint32_t fdn_order = 6;
     app.add_option("-n,--num_channels", fdn_order, "FDN order (number of channels), e.g., 4, 6, 8")->default_val(6);
 
     bool colorless_only = false;
     app.add_flag("-c,--colorless_only", colorless_only, "Only perform colorless optimization");
-
-    bool spectrum_only = false;
-    app.add_flag("--spectrum_only", spectrum_only, "Only perform spectrum optimization");
 
     bool save_output = true;
     app.add_flag("-s,--save_output", save_output, "Save optimization results to output directory");
@@ -429,12 +435,6 @@ int main(int argc, char** argv)
     app.require_subcommand(1);
     CLI11_PARSE(app, argc, argv);
 
-    if (colorless_only && spectrum_only)
-    {
-        LOG_ERROR(logger, "Cannot specify both --colorless_only and --spectrum_only flags.");
-        return -1;
-    }
-
     if (verbose)
     {
         logger->set_log_level(quill::LogLevel::Debug);
@@ -464,21 +464,6 @@ int main(int argc, char** argv)
 
     auto initial_fdn_config = CreateInitialFDNConfig(fdn_order, randomize_initial, random_delays);
 
-    // if (fdn_order == 4)
-    // {
-    //     // Use initial config from Flamo
-    //     initial_fdn_config.input_gains = {0.826640184065362, 1.548645484436521, -1.722509600191682,
-    //     -0.424687671587977}; initial_fdn_config.output_gains = {-1.2573, 0.0205, -0.4804, 0.7020};
-    //     // std::vector<float> matrix_info = {-0.3845, -0.6639, -0.2398, 0.5949,  -0.8463, 0.1093, 0.4640,  -0.2379,
-    //     //                                   0.1689,  -0.7299, 0.1492,  -0.6453, -0.3279, 0.1203, -0.8396, -0.4161};
-    //     std::vector<float> matrix_info = {
-    //         -0.384471756224396, -0.846266824474135, 0.168901340948268,  -0.327850983658839,
-    //         -0.663902209517323, 0.109319992946154,  -0.729933688121898, 0.120332066736316,
-    //         -0.239838987397092, 0.464008574135751,  0.149227166433085,  -0.839585943219154,
-    //         0.594888716474000,  -0.237860555925574, -0.645290942729706, -0.416088175964784};
-    //     initial_fdn_config.matrix_info = matrix_info;
-    // }
-
     if (save_output)
     {
         initial_fdn_config.attenuation_filter_config = sfFDN::ProportionalAttenuationConfig{2.f};
@@ -486,52 +471,34 @@ int main(int argc, char** argv)
         WriteConfigToFile(initial_fdn_config, optim_subdir / "initial_fdn_config.txt", logger);
     }
 
-    if (colorless_only || !spectrum_only)
+    LOG_INFO(logger, "Starting colorless optimization...");
+    fdn_optimization::OptimizationResult result;
+
+    result =
+        OptimizeColorless(logger, initial_fdn_config, optimizer_params,
+                          std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight), verbose);
+
+    LOG_INFO(logger, "[Colorless] Final loss: {:.6f}", result.best_loss);
+    LOG_INFO(logger, "[Colorless] Elapsed time: {:.4f} s", result.total_time.count());
+    LOG_INFO(logger, "[Colorless] Total evaluations: {}", result.total_evaluations);
+
+    if (save_output)
     {
-        LOG_INFO(logger, "Starting colorless optimization...");
-        fdn_optimization::OptimizationResult result;
+        WriteConfigToFile(result.optimized_fdn_config, optim_subdir / "colorless_fdn_config.txt", logger);
+        WriteInfoToFile(result, optimizer_params, optim_subdir / "colorless_fdn_info.txt", logger);
 
-        // for (auto i = 0u; i < 1; ++i)
-        // {
-        // LOG_INFO(logger, "Colorless optimization iteration {}/10", i + 1);
-        result = OptimizeColorless(logger, initial_fdn_config, optimizer_params,
-                                   std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight),
-                                   verbose);
-
-        // initial_fdn_config = result.optimized_fdn_config;
-        // }
-
-        LOG_INFO(logger, "[Colorless] Final loss: {:.6f}", result.best_loss);
-        LOG_INFO(logger, "[Colorless] Elapsed time: {:.4f} s", result.total_time.count());
-        LOG_INFO(logger, "[Colorless] Total evaluations: {}", result.total_evaluations);
-
-        if (save_output)
-        {
-            WriteConfigToFile(result.optimized_fdn_config, optim_subdir / "colorless_fdn_config.txt", logger);
-            WriteInfoToFile(result, optimizer_params, optim_subdir / "colorless_fdn_info.txt", logger);
-
-            result.optimized_fdn_config.attenuation_filter_config = sfFDN::ProportionalAttenuationConfig{2.f};
-            SaveImpulseResponse(result.optimized_fdn_config, kSampleRate * 3.f, optim_subdir / "colorless_ir.wav",
-                                logger);
-            WriteLossHistoryToFile(result.loss_history, result.loss_names, optim_subdir / "colorless_loss_history.txt",
-                                   logger);
-        }
-
-        initial_fdn_config = result.optimized_fdn_config;
+        result.optimized_fdn_config.attenuation_filter_config = sfFDN::ProportionalAttenuationConfig{2.f};
+        SaveImpulseResponse(result.optimized_fdn_config, kSampleRate * 3.f, optim_subdir / "colorless_ir.wav", logger);
+        WriteLossHistoryToFile(result.loss_history, result.loss_names, optim_subdir / "colorless_loss_history.txt",
+                               logger);
     }
+
+    initial_fdn_config = result.optimized_fdn_config;
 
     if (colorless_only)
     {
         LOG_INFO(logger, "Colorless-only optimization flag set. Exiting.");
         return 0;
-    }
-
-    if (spectrum_only && fdn_order == 4)
-    {
-        LOG_INFO(logger, "Using predefined optimized matrix for spectrum optimization.");
-        initial_fdn_config.matrix_info = sfFDN::GenerateMatrix(4, sfFDN::ScalarMatrixType::Hadamard);
-        initial_fdn_config.input_gains = std::vector<float>(4, 0.5f);
-        initial_fdn_config.output_gains = std::vector<float>(4, 0.5f);
     }
 
     std::vector<float> target_rir;
@@ -548,10 +515,34 @@ int main(int argc, char** argv)
             LOG_ERROR(logger, "Failed to load target RIR.");
             return -1;
         }
+
+        // if (target_rir.size() < kSampleRate)
+        // {
+        //     std::vector<float> padded_rir(kSampleRate, 0.0f);
+        //     std::copy(target_rir.begin(), target_rir.end(), padded_rir.begin());
+        //     target_rir = std::move(padded_rir);
+        //     LOG_INFO(logger, "Padded target RIR to {} samples.", target_rir.size());
+        // }
     }
 
-    auto result = OptimizeSpectrum(logger, initial_fdn_config, optimizer_params, target_rir,
-                                   std::make_tuple(edc_weight, mel_edr_weight), verbose);
+    std::vector<float> early_fir;
+    if (!early_fir_path.empty())
+    {
+        int num_channels = 0;
+        int sample_rate = kSampleRate;
+        if (audio_utils::audio_file::ReadWavFile(early_fir_path, early_fir, sample_rate, num_channels))
+        {
+            LOG_INFO(logger, "Loaded {} with {} samples at {} Hz.", early_fir_path, early_fir.size(), sample_rate);
+        }
+        else
+        {
+            LOG_ERROR(logger, "Failed to load early reflection FIR.");
+            return -1;
+        }
+    }
+
+    result = OptimizeSpectrum(logger, initial_fdn_config, optimizer_params, target_rir, early_fir,
+                              std::make_tuple(edc_weight, mel_edr_weight, weighted_edr_weight), verbose);
     LOG_INFO(logger, "[Spectrum] Final loss: {:.6f}", result.best_loss);
     LOG_INFO(logger, "[Spectrum] Elapsed time: {:.4f} s", result.total_time.count());
     LOG_INFO(logger, "[Spectrum] Total evaluations: {}", result.total_evaluations);
@@ -561,9 +552,9 @@ int main(int argc, char** argv)
         WriteConfigToFile(result.optimized_fdn_config, optim_subdir / "optimized_fdn_config.txt", logger);
         WriteFilterConfigToFile(result.optimized_fdn_config, optim_subdir / "optimized_filter_config.txt", logger);
         SaveImpulseResponse(result.initial_fdn_config, target_rir.size(), optim_subdir / "spectrum_initial_ir.wav",
-                            logger);
+                            logger, early_fir);
         SaveImpulseResponse(result.optimized_fdn_config, target_rir.size(), optim_subdir / "spectrum_optimized_ir.wav",
-                            logger);
+                            logger, early_fir);
         WriteLossHistoryToFile(result.loss_history, result.loss_names, optim_subdir / "spectrum_loss_history.txt",
                                logger);
 
@@ -606,23 +597,11 @@ void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_fi
     auto fdn = sfFDN::CreateFDNFromConfig(fdn_config, kSampleRate);
     fdn->SetDirectGain(0.0f);
 
-    auto tc_filter = fdn->GetTCFilter()->Clone();
-    std::vector<float> filtered_direct(audio_file.size(), 0.0f);
-    sfFDN::AudioBuffer direct_input_buffer(audio_file);
-    sfFDN::AudioBuffer direct_output_buffer(filtered_direct);
-    tc_filter->Process(direct_input_buffer, direct_output_buffer);
-
     std::vector<float> output_audio(audio_file.size(), 0.0f);
     sfFDN::AudioBuffer input_buffer(audio_file);
     sfFDN::AudioBuffer output_buffer(output_audio);
 
     fdn->Process(input_buffer, output_buffer);
-
-    // Mix the filtered direct signal back in for better audibility of the FDN effect
-    for (size_t i = 0; i < output_audio.size(); ++i)
-    {
-        output_audio[i] += 0.2f * filtered_direct[i];
-    }
 
     std::filesystem::path output_path =
         output_dir / (std::filesystem::path(input_filename).stem().string() + "_wet.wav");

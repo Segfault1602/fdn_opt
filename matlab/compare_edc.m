@@ -14,7 +14,7 @@ RESULTS = RESULTS([RESULTS.isdir]);
 RESULTS = RESULTS(idx);
 
 
-LATEST_DIR = RESULTS(end-1);
+LATEST_DIR = RESULTS(end);
 
 INIT_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "spectrum_initial_ir.wav");
 OPTIM_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "spectrum_optimized_ir.wav");
@@ -35,6 +35,10 @@ if target_fs ~= init_fs
     [p,q] = rat(opt_fs/target_fs);
     target_ir = resample(target_ir,p,q );
     target_fs = opt_fs;
+end
+
+if size(target_ir,1) ~= size(opt_ir,1)
+    target_ir = [target_ir; zeros(size(opt_ir,1)-size(target_ir,1),1)];
 end
 
 % opt_ir(500)= 0.5;
@@ -144,10 +148,10 @@ figure(5);
 
 n_fft = 4096;
 hop_size = 128;
-win_size = 1024;
+win_size = 4096;
 ovl_len = win_size - hop_size;
 win = hann(win_size);
-n_mels = 132;
+n_mels = 128;
 
 subplot(311);
 % pspectrum(target_ir, target_fs, "spectrogram");
@@ -205,6 +209,7 @@ view([0,90]);
 axis([oT(1) oT(end) oF(1) oF(end)])
 title("Error");
 colorbar;
+clim([0 30]);
 
 
 

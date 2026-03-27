@@ -517,6 +517,12 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
 
     model.SetGradientDelta(gradient_delta);
 
+    if (!info.early_fir.empty())
+    {
+        LOG_INFO(logger_, "Setting early FIR with size {}", info.early_fir.size());
+        model.SetEarlyFir(info.early_fir);
+    }
+
     LOG_INFO(logger_, "Gradient method: {}, Gradient delta: {}",
              info.gradient_method == GradientMethod::CentralDifferences ? "Central Differences" : "Forward Differences",
              gradient_delta);

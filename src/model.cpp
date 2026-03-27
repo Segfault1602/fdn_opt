@@ -25,7 +25,7 @@ std::vector<float> BorrowVector(size_t size)
         auto vec = std::move(gVectorPool.front());
         gVectorPool.pop();
 
-        if (vec.size() < size)
+        if (vec.size() != size)
         {
             vec.resize(size, 0.0f);
         }
@@ -447,6 +447,8 @@ FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
     constexpr uint32_t kRandomSeed = 42;
     const uint32_t fdn_order = initial_config_.N;
 
+    early_fir_.clear();
+
     // arma::arma_rng::set_seed_random();
 
     if (initial_config_.delays.size() != fdn_order)
@@ -587,10 +589,17 @@ std::vector<float> FDNModel::GenerateIR(const arma::mat& params)
     std::ranges::fill(impulse_buffer, 0.0f);
     std::ranges::fill(response_buffer, 0.0f);
 
-    impulse_buffer[0] = 1.0f; // Delta impulse
+    if (early_fir_.empty())
+    {
+        impulse_buffer[0] = 1.0f; // Delta impulse
+    }
+    else
+    {
+        std::copy(early_fir_.begin(), early_fir_.end(), impulse_buffer.begin());
+    }
 
-    sfFDN::AudioBuffer in_buffer(impulse_buffer);
-    sfFDN::AudioBuffer out_buffer(response_buffer);
+    sfFDN::AudioBuffer in_buffer(ir_size_, 1, impulse_buffer);
+    sfFDN::AudioBuffer out_buffer(ir_size_, 1, response_buffer);
     auto fdn = sfFDN::CreateFDNFromConfig(GetFDNConfig(params), kSampleRate);
     fdn->Process(in_buffer, out_buffer);
 

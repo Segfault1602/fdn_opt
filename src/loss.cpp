@@ -39,55 +39,35 @@ void ReturnFFTToPool(std::unique_ptr<audio_utils::FFT> fft)
     gFFTPool.push_back(std::move(fft));
 }
 
-float L1Loss(std::span<const float> signal, std::span<const float> target)
+enum class ReductionType
 {
-    if (signal.size() != target.size())
+    Mean,
+    Sum,
+    NormalizedMean
+};
+
+template <typename T>
+float L1Loss(const T& signal, const T& target, ReductionType reduction = ReductionType::NormalizedMean)
+{
+    auto loss = arma::abs(signal - target);
+    switch (reduction)
     {
-        throw std::runtime_error("L1Loss: Signal and target must have the same size.");
+    case ReductionType::Mean:
+        return arma::mean(loss);
+    case ReductionType::Sum:
+        return arma::accu(loss);
+    case ReductionType::NormalizedMean:
+        return arma::accu(loss) / arma::accu(arma::abs(target));
     }
-
-    for (size_t i = 0; i < signal.size(); ++i)
-    {
-        if (std::isnan(signal[i]) || std::isinf(signal[i]))
-        {
-            throw std::runtime_error("L1Loss: Signal contains NaN or Inf values.");
-        }
-
-        if (std::isnan(target[i]) || std::isinf(target[i]))
-        {
-            throw std::runtime_error("L1Loss: Target contains NaN or Inf values.");
-        }
-    }
-
-    const arma::fvec signal_vec(const_cast<float*>(signal.data()), signal.size(), false, true);
-    const arma::fvec target_vec(const_cast<float*>(target.data()), target.size(), false, true);
-
-    auto diff = arma::sum(arma::abs(signal_vec - target_vec));
-    auto target_sum = arma::sum(arma::abs(target_vec));
-
-    assert(!std::isnan(diff));
-    assert(!std::isinf(diff));
-
-    assert(!std::isnan(target_sum));
-    assert(!std::isinf(target_sum));
-
-    return diff / target_sum;
-
-    // return arma::sum(arma::abs(signal_vec - target_vec)) / arma::sum(arma::abs(target_vec));
+    // return arma::accu(arma::abs(signal - target)) / arma::accu(arma::abs(target));
 }
 
-float L2Loss(std::span<const float> signal, std::span<const float> target)
+template <typename T>
+float L2Loss(const T& signal, const T& target)
 {
-    if (signal.size() != target.size())
-    {
-        throw std::runtime_error("L2Loss: Signal and target must have the same size.");
-    }
-
-    const arma::fvec signal_vec(const_cast<float*>(signal.data()), signal.size(), false, true);
-    const arma::fvec target_vec(const_cast<float*>(target.data()), target.size(), false, true);
-
-    return arma::sum(arma::square(signal_vec - target_vec)) / arma::sum(arma::square(target_vec));
+    return arma::accu(arma::square(signal - target)) / arma::accu(arma::square(target));
 }
+
 } // namespace
 
 namespace fdn_optimization
@@ -218,34 +198,50 @@ float SparsityLoss(std::span<const float> signal)
     return l2_norm / l1_norm;
 }
 
-// float EDCLoss(std::span<const float> signal,
-//               const std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands>& target_relief)
-// {
-//     std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands> edc_result =
-//         audio_utils::analysis::EnergyDecayCurve_FilterBank(signal, false);
+float MultiResolutionSTFTLoss(std::span<const float> signal, std::span<audio_utils::analysis::STFTResult> target_stfts,
+                              const MultiResolutionSTFTLossOptions& options)
+{
+    float total_loss = 0.0f;
 
-//     float loss = 0.0f;
+    [[maybe_unused]] const uint32_t num_combination = options.fft_sizes.size();
+    assert(target_stfts.size() == options.fft_sizes.size());
+    assert(options.fft_sizes.size() == num_combination);
+    assert(options.hop_sizes.size() == num_combination);
+    assert(options.window_sizes.size() == num_combination);
 
-//     constexpr float kDropLastPercent = 0.50f; // Drop last % of EDC to avoid tail artifacts
+    for (auto [fft_size, hop_size, window_size, target_stft] :
+         std::views::zip(options.fft_sizes, options.hop_sizes, options.window_sizes, target_stfts))
+    {
+        audio_utils::analysis::STFTOptions stft_options;
+        stft_options.fft_size = fft_size;
+        stft_options.overlap = window_size - hop_size;
+        stft_options.window_size = window_size;
+        stft_options.window_type = options.window_type;
 
-//     for (auto&& [decay_curve, target_curve] : std::views::zip(edc_result, target_relief))
-//     {
-//         const size_t min_size = std::min(decay_curve.size(), target_curve.size());
-//         const size_t analysis_size = static_cast<size_t>(min_size * (1.0f - kDropLastPercent));
+        audio_utils::analysis::STFTResult stft_result;
+        if (options.mel_scale)
+        {
+            stft_result = audio_utils::analysis::MelSpectrogram(signal, stft_options, options.n_mels);
+        }
+        else
+        {
+            stft_result = audio_utils::analysis::STFT(signal, stft_options);
+        }
 
-//         auto decay_curve_span = std::span<float>(decay_curve).subspan(0, analysis_size);
-//         auto target_curve_span = std::span<const float>(target_curve).subspan(0, analysis_size);
+        if (stft_result.num_bins != target_stft.num_bins || stft_result.num_frames != target_stft.num_frames)
+        {
+            throw std::runtime_error("MultiResolutionSTFTLoss: STFT result size does not match target size.");
+        }
 
-//         const arma::fvec decay_vec(decay_curve_span.data(), decay_curve_span.size(), false, true);
-//         const arma::fvec target_vec(const_cast<float*>(target_curve_span.data()), target_curve_span.size(), false,
-//                                     true);
+        const arma::fmat stft_mat(stft_result.data.data(), stft_result.num_bins, stft_result.num_frames);
+        const arma::fmat target_mat(const_cast<float*>(target_stft.data.data()), target_stft.num_bins,
+                                    target_stft.num_frames);
 
-//         float curve_loss = arma::mean(arma::square(decay_vec - target_vec));
-//         loss += curve_loss;
-//     }
-
-//     return std::sqrt(loss);
-// }
+        float loss = L1Loss(stft_mat.as_col(), target_mat.as_col());
+        total_loss += loss;
+    }
+    return total_loss;
+}
 
 float EDCLoss(std::span<const float> signal, const std::vector<float>& target_edc)
 {
@@ -256,7 +252,10 @@ float EDCLoss(std::span<const float> signal, const std::vector<float>& target_ed
         throw std::runtime_error("EDCLoss: EDC result size does not match target size.");
     }
 
-    return L2Loss(edc, target_edc);
+    const arma::fvec edc_vec(const_cast<float*>(edc.data()), edc.size(), false, true);
+    const arma::fvec target_vec(const_cast<float*>(target_edc.data()), target_edc.size(), false, true);
+
+    return L2Loss(edc_vec, target_vec);
 }
 
 float EDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
@@ -270,8 +269,11 @@ float EDRLoss(std::span<const float> signal, const audio_utils::analysis::Energy
         throw std::runtime_error("EDRLoss: EDR result size does not match target size.");
     }
 
+    const arma::fmat edr_mat(edr_result.data.data(), edr_result.num_bins, edr_result.num_frames);
+    const arma::fmat target_mat(const_cast<float*>(target_edr.data.data()), target_edr.num_bins, target_edr.num_frames);
+
     // Mezza et al. loss
-    return L1Loss(edr_result.data, target_edr.data);
+    return L1Loss(edr_mat.as_col(), target_mat.as_col());
 
     // St-Onge loss
     // float loss = arma::mean(arma::square(edr_vec - target_vec));
@@ -305,9 +307,9 @@ float WeightedEDRLoss(std::span<const float> signal, const audio_utils::analysis
             end_idx = end_db_idx(0);
         }
 
-        auto diff = arma::sum(arma::abs(edr_mat.row(bin).subvec(0, end_idx) - target_mat.row(bin).subvec(0, end_idx)));
-        auto sum = arma::sum(arma::abs(target_mat.row(bin).subvec(0, end_idx)));
-        error += diff / sum;
+        // auto diff = arma::sum(arma::abs(edr_mat.row(bin).subvec(0, end_idx) - target_mat.row(bin).subvec(0,
+        // end_idx))); auto sum = arma::sum(arma::abs(target_mat.row(bin).subvec(0, end_idx))); error += diff / sum;
+        error += L1Loss(edr_mat.row(bin).subvec(0, end_idx), target_mat.row(bin).subvec(0, end_idx));
     }
 
     return error;

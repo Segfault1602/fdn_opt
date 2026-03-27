@@ -1,11 +1,12 @@
-ir = "../rirs/py_rirs/rir_hallway.wav"
+ir = "../rirs/py_rirs/rir_dining_room.wav"
+#early_fir_path = "../rirs/py_rirs/early_reflections_filter/early_office_lobby.wav"
 num_channels = 6
 spectral_flatness_weight = 1
 sparsity_weight = 0.5
 power_envelope_weight = 0
-edc_weight = 0.1
-mel_edr_weight = 1
-weighted_edr_weight = 0
+edc_weight = 1
+mel_edr_weight = 0
+weighted_edr_weight = 1
 randomize_initial_params = false
 random_delays = false
 save_output = true

@@ -31,8 +31,20 @@ float MixingTimeLoss(std::span<const float> signal, uint32_t sample_rate);
 
 float SparsityLoss(std::span<const float> signal);
 
-// float EDCLoss(std::span<const float> signal,
-//   const std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands>& target_relief);
+struct MultiResolutionSTFTLossOptions
+{
+    std::vector<uint32_t> fft_sizes = {1024, 2048, 512};
+    std::vector<uint32_t> hop_sizes = {120, 240, 50};
+    std::vector<uint32_t> window_sizes = {600, 1200, 240};
+    audio_utils::FFTWindowType window_type = audio_utils::FFTWindowType::Hann;
+    uint32_t sample_rate = 48000;
+    bool mel_scale = false;
+    uint32_t n_mels = 32;
+};
+
+float MultiResolutionSTFTLoss(std::span<const float> signal, std::span<audio_utils::analysis::STFTResult> target_stfts,
+                              const MultiResolutionSTFTLossOptions& options);
+
 float EDCLoss(std::span<const float> signal, const std::vector<float>& target_edc);
 
 float EDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,

@@ -60,6 +60,11 @@ class FDNModel
         gradient_delta_ = delta;
     }
 
+    void SetEarlyFir(std::span<const float> early_fir)
+    {
+        early_fir_.assign(early_fir.begin(), early_fir.end());
+    }
+
     void SetT60Estimates(std::span<const float> t60_estimates);
 
     arma::mat GetInitialParams() const;
@@ -103,6 +108,7 @@ class FDNModel
     double gradient_delta_ = 1e-3;
 
     GradientMethod gradient_method_ = GradientMethod::CentralDifferences;
+    std::vector<float> early_fir_;
 
     void GradientCentralDifferences(const arma::mat& x, arma::mat& g);
     void GradientForwardDifferences(const arma::mat& x, arma::mat& g, double current_loss);
