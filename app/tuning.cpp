@@ -185,7 +185,6 @@ int main(int argc, char** argv)
                                                 .initial_fdn_config = initial_fdn_config,
                                                 .ir_size = static_cast<uint32_t>(target_rir.size()),
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
-                                                .gradient_delta = 1e-2,
                                                 .target_rir = target_rir,
                                                 .optimizer_params = {}};
     const std::string optim_type = args[0];

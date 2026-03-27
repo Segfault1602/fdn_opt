@@ -25,7 +25,6 @@ fprintf("Previous: %s\n", PREVIOUS_DIR.name);
 
 [init_ir, init_fs] = audioread(INIT_IR);
 [opt_ir, opt_fs] = audioread(COLORLESS_IR);
-opt_ir = opt_ir / max(abs(opt_ir));
 
 init_ir = init_ir(1:init_fs);
 opt_ir = opt_ir(1:opt_fs);
@@ -35,17 +34,19 @@ irLen = size(init_ir,1);
 noise = randn(irLen,1);
 noise = noise / max(abs(noise));
 
+t = (0:irLen-1) / opt_fs;
+
 figure(1);clf;
 tiledlayout(2,1);
 
 ax1 = nexttile;
 [t_abel, edc_init] = echoDensity(init_ir, 4096, opt_fs, 0);
-plot(ax1, init_ir);
+plot(ax1, t, init_ir);
 hold on;
-plot(ax1, edc_init);
+plot(ax1, t, edc_init);
 
 if t_abel > 0
-    xline(t_abel / 1000 * init_fs);
+    xline(t_abel / 1000 );
 end
 
 hold off;
@@ -57,12 +58,12 @@ ax2 = nexttile;
 
 [t_abel, edc] = echoDensity(opt_ir, 4096, opt_fs, 0);
 
-plot(ax2, opt_ir);
+plot(ax2, t, opt_ir);
 hold on;
-plot(ax2, edc);
-plot(ax2, edc_init, "--");
+plot(ax2, t, edc);
+plot(ax2, t, edc_init, "--");
 if t_abel > 0
-    xline(t_abel / 1000 * init_fs);
+    xline(t_abel / 1000 );
 end
 
 hold off;
@@ -77,17 +78,17 @@ WIN_LEN = 2^13;
 OVL_LEN = round(0.5*WIN_LEN);
 
 figure(2);clf;
-flat_range = [32 16000];
+flat_range = [0 opt_fs/2];
 spectralFlatness(init_ir, init_fs, Window=rectwin(WIN_LEN), OverlapLength=OVL_LEN, ...
               Range=flat_range);
 
-init_flat = spectralFlatness(init_ir, init_fs, Window=rectwin(size(init_ir,1)), OverlapLength=OVL_LEN, ...
+init_flat = spectralFlatness(init_ir, init_fs, Window=rectwin(size(init_ir,1)), OverlapLength=0, ...
               Range=flat_range);
 
 hold on;
 spectralFlatness(opt_ir, opt_fs, Window=rectwin(WIN_LEN), OverlapLength=OVL_LEN, ...
               Range=flat_range);
-optim_flat = spectralFlatness(opt_ir, opt_fs, Window=rectwin(size(opt_ir,1)), OverlapLength=OVL_LEN, ...
+optim_flat = spectralFlatness(opt_ir, opt_fs, Window=rectwin(size(opt_ir,1)), OverlapLength=0, ...
               Range=flat_range);
 
 spectralFlatness(noise, opt_fs, Window=rectwin(WIN_LEN), OverlapLength=OVL_LEN, ...

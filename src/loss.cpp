@@ -107,7 +107,8 @@ float RMS(std::span<const float> signal)
 
 float SpectralFlatnessLoss(std::span<const float> signal)
 {
-    uint32_t fft_size = std::max(static_cast<uint32_t>(signal.size()), static_cast<uint32_t>(48000));
+    // uint32_t fft_size = std::max(static_cast<uint32_t>(signal.size()), static_cast<uint32_t>(48000));
+    uint32_t fft_size = signal.size();
     auto fft_ptr = BorrowFFTForSize(fft_size);
 
     std::vector<float> spectrum((fft_ptr->GetFFTSize() / 2) + 1, 0.0f);
@@ -159,10 +160,10 @@ float PowerEnvelopeLoss(std::span<const float> signal, uint32_t window_size, uin
     return 1.f;
 }
 
-float MixingTimeLoss(std::span<const float> signal, uint32_t sample_rate, float target_mixing_time)
+float MixingTimeLoss(std::span<const float> signal, uint32_t sample_rate)
 {
-    constexpr float kWindowSizeMs = 50.0f;
-    constexpr float kHopSizeMs = 10.0f;
+    constexpr float kWindowSizeMs = 20.0f;
+    constexpr float kHopSizeMs = 5.0f;
     const uint32_t window_size = static_cast<uint32_t>((kWindowSizeMs / 1000.0f) * static_cast<float>(sample_rate));
     const uint32_t hop_size = static_cast<uint32_t>((kHopSizeMs / 1000.0f) * static_cast<float>(sample_rate));
 
@@ -173,7 +174,30 @@ float MixingTimeLoss(std::span<const float> signal, uint32_t sample_rate, float 
 
     auto results = audio_utils::analysis::EchoDensity(signal, options);
 
-    return std::abs(results.mixing_time - target_mixing_time);
+    const arma::fvec sparse_echo_density(results.echo_densities.data(), results.echo_densities.size(), false, true);
+    arma::fvec sparse_indices(results.sparse_indices.size());
+
+    for (size_t i = 0; i < results.sparse_indices.size(); ++i)
+    {
+        sparse_indices(i) = static_cast<float>(results.sparse_indices[i]);
+    }
+
+    arma::fvec time_index = arma::regspace<arma::fvec>(0.0f, signal.size() - 1);
+    arma::fvec echo_density;
+    arma::interp1(sparse_indices, sparse_echo_density, time_index, echo_density);
+
+    constexpr float kEchoDensityThreshold = 0.9f;
+    arma::uvec above_threshold_indices = arma::find(echo_density >= kEchoDensityThreshold, 1, "first");
+
+    if (above_threshold_indices.empty())
+    {
+        // If the echo density never reaches the threshold, return a large loss
+        return 2.0f - echo_density.max(); // Encourage higher echo density
+    }
+
+    float mixing_time = static_cast<float>(above_threshold_indices(0)) / static_cast<float>(sample_rate);
+
+    return mixing_time;
 }
 
 float SparsityLoss(std::span<const float> signal)
@@ -253,4 +277,40 @@ float EDRLoss(std::span<const float> signal, const audio_utils::analysis::Energy
     // float loss = arma::mean(arma::square(edr_vec - target_vec));
     // return std::sqrt(loss);
 }
+
+float WeightedEDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
+                      const audio_utils::analysis::EnergyDecayReliefOptions& options)
+{
+    audio_utils::analysis::EnergyDecayReliefResult edr_result =
+        audio_utils::analysis::EnergyDecayRelief(signal, options);
+
+    if (edr_result.num_bins != target_edr.num_bins || edr_result.num_frames != target_edr.num_frames)
+    {
+        throw std::runtime_error("WeightedEDRLoss: EDR result size does not match target size.");
+    }
+
+    const arma::fmat edr_mat(edr_result.data.data(), edr_result.num_bins, edr_result.num_frames);
+    const arma::fmat target_mat(const_cast<float*>(target_edr.data.data()), target_edr.num_bins, target_edr.num_frames);
+
+    float error = 0.0f;
+    for (auto bin = 0; bin < edr_result.num_bins; ++bin)
+    {
+        float start_db = target_mat(bin, 0);
+        const float end_db = start_db - 25.f; // Only weight the first 10 dB of decay
+
+        size_t end_idx = edr_result.num_frames - 1;
+        arma::uvec end_db_idx = arma::find(target_mat.row(bin) <= end_db, 1, "first");
+        if (!end_db_idx.empty())
+        {
+            end_idx = end_db_idx(0);
+        }
+
+        auto diff = arma::sum(arma::abs(edr_mat.row(bin).subvec(0, end_idx) - target_mat.row(bin).subvec(0, end_idx)));
+        auto sum = arma::sum(arma::abs(target_mat.row(bin).subvec(0, end_idx)));
+        error += diff / sum;
+    }
+
+    return error;
+}
+
 } // namespace fdn_optimization

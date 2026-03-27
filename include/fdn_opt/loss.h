@@ -27,7 +27,7 @@ float RMSLoss(std::span<const float> signal, float target_rms);
 
 float PowerEnvelopeLoss(std::span<const float> signal, uint32_t window_size, uint32_t hop_size, uint32_t sample_rate);
 
-float MixingTimeLoss(std::span<const float> signal, uint32_t sample_rate, float target_mixing_time);
+float MixingTimeLoss(std::span<const float> signal, uint32_t sample_rate);
 
 float SparsityLoss(std::span<const float> signal);
 
@@ -37,5 +37,8 @@ float EDCLoss(std::span<const float> signal, const std::vector<float>& target_ed
 
 float EDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
               const audio_utils::analysis::EnergyDecayReliefOptions& options);
+
+float WeightedEDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
+                      const audio_utils::analysis::EnergyDecayReliefOptions& options);
 
 } // namespace fdn_optimization

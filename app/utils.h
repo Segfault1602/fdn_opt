@@ -68,6 +68,128 @@ inline void WriteConfigToFile(const sfFDN::FDNConfig& config, const std::filesys
     }
 }
 
+inline void WriteInfoToFile(const fdn_optimization::OptimizationResult& result,
+                            const fdn_optimization::OptimizationAlgoParams& optimizer_params,
+                            const std::filesystem::path& filename, quill::Logger* logger)
+{
+    std::ofstream file(filename, std::ios::out);
+    if (!file.is_open())
+    {
+        LOG_ERROR(logger, "Failed to open file {} for writing optimization info.", filename.string());
+        return;
+    }
+
+    file << "Best Loss: " << result.best_loss << std::endl;
+    file << "Total Time (s): " << result.total_time.count() << std::endl;
+    file << "Total Evaluations: " << result.total_evaluations << std::endl;
+
+    std::visit(
+        [&](const auto& params) {
+            using T = std::decay_t<decltype(params)>;
+            if constexpr (std::is_same_v<T, fdn_optimization::AdamParameters>)
+            {
+                file << "Optimizer: Adam" << std::endl;
+                file << "    Step Size: " << params.step_size << std::endl;
+                file << "    Beta1: " << params.beta1 << std::endl;
+                file << "    Beta2: " << params.beta2 << std::endl;
+                file << "    Tolerance: " << params.tolerance << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::L_BFGSParameters>)
+            {
+                file << "Optimizer: L-BFGS" << std::endl;
+                file << "    Num Basis: " << params.num_basis << std::endl;
+                file << "    Max Iterations: " << params.max_iterations << std::endl;
+                file << "    Wolfe: " << params.wolfe << std::endl;
+                file << "    Min Gradient Norm: " << params.min_gradient_norm << std::endl;
+                file << "    Factor: " << params.factor << std::endl;
+                file << "    Max Line Search Trials: " << params.max_line_search_trials << std::endl;
+                file << "    Min Step: " << params.min_step << std::endl;
+                file << "    Max Step: " << params.max_step << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::SPSAParameters>)
+            {
+                file << "Optimizer: SPSA" << std::endl;
+                file << "    Alpha: " << params.alpha << std::endl;
+                file << "    Gamma: " << params.gamma << std::endl;
+                file << "    Step Size: " << params.step_size << std::endl;
+                file << "    Evaluation Step Size: " << params.evaluationStepSize << std::endl;
+                file << "    Max Iterations: " << params.max_iterations << std::endl;
+                file << "    Tolerance: " << params.tolerance << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::SimulatedAnnealingParameters>)
+            {
+                file << "Optimizer: Simulated Annealing" << std::endl;
+                file << "    Max Iterations: " << params.max_iterations << std::endl;
+                file << "    Initial Temperature: " << params.initial_temperature << std::endl;
+                file << "    Init Moves: " << params.init_moves << std::endl;
+                file << "    Move Ctrl Sweep: " << params.move_ctrl_sweep << std::endl;
+                file << "    Max Tolerance Sweep: " << params.max_tolerance_sweep << std::endl;
+                file << "    Max Move Coef: " << params.max_move_coef << std::endl;
+                file << "    Init Move Coef: " << params.init_move_coef << std::endl;
+                file << "    Gain: " << params.gain << std::endl;
+                file << "    Tolerance: " << params.tolerance << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::GradientDescentParameters>)
+            {
+                file << "Optimizer: Gradient Descent" << std::endl;
+                file << "    Step Size: " << params.step_size << std::endl;
+                file << "    Max Iterations: " << params.max_iterations << std::endl;
+                file << "    Tolerance: " << params.tolerance << std::endl;
+                file << "    Kappa: " << params.kappa << std::endl;
+                file << "    Phi: " << params.phi << std::endl;
+                file << "    Momentum: " << params.momentum << std::endl;
+                file << "    Min Gain: " << params.min_gain << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::CMAESParameters>)
+            {
+                file << "Optimizer: CMA-ES" << std::endl;
+                file << "    Population Size: " << params.population_size << std::endl;
+                file << "    Max Iterations: " << params.max_iterations << std::endl;
+                file << "    Tolerance: " << params.tolerance << std::endl;
+                file << "    Step Size: " << params.step_size << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::DifferentialEvolutionParameters>)
+            {
+                file << "Optimizer: Differential Evolution" << std::endl;
+                file << "    Population Size: " << params.population_size << std::endl;
+                file << "    Max Generation: " << params.max_generation << std::endl;
+                file << "    Crossover Rate: " << params.crossover_rate << std::endl;
+                file << "    Differential Weight: " << params.differential_weight << std::endl;
+                file << "    Tolerance: " << params.tolerance << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::PSOParameters>)
+            {
+                file << "Optimizer: PSO" << std::endl;
+                file << "    Num Particles: " << params.num_particles << std::endl;
+                file << "    Max Iterations: " << params.max_iterations << std::endl;
+                file << "    Horizon Size: " << params.horizon_size << std::endl;
+                file << "    Exploitation Factor: " << params.exploitation_factor << std::endl;
+                file << "    Exploration Factor: " << params.exploration_factor << std::endl;
+                file << "    Tolerance: " << params.tolerance << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::CNEParameters>)
+            {
+                file << "Optimizer: CNE" << std::endl;
+                file << "    Population Size: " << params.population_size << std::endl;
+                file << "    Max Generations: " << params.max_generations << std::endl;
+                file << "    Mutation Probability: " << params.mutation_probability << std::endl;
+                file << "    Mutation Size: " << params.mutation_size << std::endl;
+                file << "    Select Percent: " << params.select_percent << std::endl;
+                file << "    Tolerance: " << params.tolerance << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::RandomSearchParameters>)
+            {
+                file << "Optimizer: Random Search" << std::endl;
+                file << "    Time Limit (s): " << params.time_limit_seconds << std::endl;
+            }
+            else
+            {
+                file << "Optimizer: Unknown" << std::endl;
+            }
+        },
+        optimizer_params);
+}
+
 inline void WriteFilterConfigToFile(const sfFDN::FDNConfig& config, const std::filesystem::path& filename,
                                     quill::Logger* logger)
 {
@@ -83,11 +205,52 @@ inline void WriteFilterConfigToFile(const sfFDN::FDNConfig& config, const std::f
     // Row 2: tone correction frequencies
     // Row 3: tone correction gains
 
-    for (const auto& t60 : config.attenuation_t60s)
-    {
-        file << t60 << " ";
-    }
-    file << std::endl;
+    std::visit(
+        [&](const auto& attenuation_config) {
+            using T = std::decay_t<decltype(attenuation_config)>;
+            if constexpr (std::is_same_v<T, sfFDN::TenBandFilterConfig>)
+            {
+                for (const auto& t60 : attenuation_config.t60s)
+                {
+                    file << t60 << " ";
+                }
+                file << std::endl;
+            }
+            else if constexpr (std::is_same_v<T, sfFDN::ThreeBandFilterConfig>)
+            {
+                if (attenuation_config.t60s_per_channel.has_value())
+                {
+                    auto idx = 0;
+                    for (const auto& t60 : attenuation_config.t60s_per_channel.value())
+                    {
+                        file << t60 << " ";
+                        if (++idx % 3 == 0)
+                        {
+                            file << "; ";
+                        }
+                    }
+                    file << std::endl;
+                }
+                else
+                {
+                    for (const auto& t60 : attenuation_config.t60s)
+                    {
+                        file << t60 << " ";
+                    }
+                }
+                for (const auto& freq : attenuation_config.freqs)
+                {
+                    file << freq << " ";
+                }
+
+                file << std::endl;
+            }
+            else
+            {
+                LOG_ERROR(logger, "Unknown attenuation filter config type when writing filter config to file.");
+            }
+        },
+        config.attenuation_filter_config);
 
     for (const auto& freq : config.tc_frequencies)
     {

@@ -8,10 +8,37 @@
 #include "optim_types.h"
 
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 namespace fdn_optimization
 {
+
+class LossRegistry
+{
+  public:
+    static LossRegistry& Instance()
+    {
+        static LossRegistry instance;
+        return instance;
+    }
+
+    void RegisterLoss(const std::vector<double>& losses)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        losses_ = losses;
+    }
+
+    std::vector<double> GetLosses()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return losses_;
+    }
+
+  private:
+    std::vector<double> losses_;
+    std::mutex mutex_;
+};
 
 class FDNModel
 {
@@ -59,7 +86,7 @@ class FDNModel
         // No-op
     }
 
-    std::vector<double> last_losses_;
+    // std::vector<double> last_losses_;
 
   private:
     sfFDN::FDNConfig initial_config_;

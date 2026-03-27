@@ -14,11 +14,11 @@ RESULTS = RESULTS([RESULTS.isdir]);
 RESULTS = RESULTS(idx);
 
 
-LATEST_DIR = RESULTS(end);
+LATEST_DIR = RESULTS(end-1);
 
-INIT_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "initial_ir.wav");
-OPTIM_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "optimized_ir.wav");
-OPTIM_LOSS = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "loss_history.txt");
+INIT_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "spectrum_initial_ir.wav");
+OPTIM_IR = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "spectrum_optimized_ir.wav");
+OPTIM_LOSS = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "spectrum_loss_history.txt");
 OPTIM_FILTER = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "optimized_filter_config.txt");
 TARGET_RIR_NAME = fullfile(LATEST_DIR.folder, LATEST_DIR.name, "target_rir_name.txt");
 
@@ -224,12 +224,13 @@ legend();
 figure(8);
 
 
-filter_mat = readmatrix(OPTIM_FILTER);
-fdn_t60s = filter_mat(1,:);
-fdn_freqs = filter_mat(2, :);
-fdn_tc_gains = filter_mat(3,:);
+% filter_mat = readcell(OPTIM_FILTER);
+% fdn_t60s = str2num(filter_mat{1,:});
+% fdn_freqs = str2num(filter_mat{2, :});
+% fdn_decay_freqs = fdn_freqs;
+% fdn_tc_gains = str2num(filter_mat{3,:});
 
-net = DecayFitNetToolbox(1, target_fs, fdn_freqs);
+net = DecayFitNetToolbox(1, target_fs);
 [tVals_decayfitnet, aVals_decayfitnet, nVals_decayFitNet, normVals_decayFitNet] = net.estimateParameters(target_ir);
 disp('==== DecayFitNet: Estimated T values (in seconds, T=0 indicates an inactive slope): ====') 
 disp(tVals_decayfitnet)
@@ -242,12 +243,18 @@ decayFitNet_Freqs = net.getFilterFrequencies();
 semilogx(decayFitNet_Freqs, tVals_decayfitnet, DisplayName="DecayFitNet");
 
 hold on;
-plot(fdn_freqs, fdn_t60s, DisplayName="Optimized");
+% 
+% if size(fdn_t60s, 2) == 5
+%     fdn_decay_freqs = [fdn_t60s(4) (fdn_t60s(4) + fdn_t60s(5))/2 fdn_t60s(5)];
+%     fdn_t60s = fdn_t60s(1:3);
+% end
+% plot(fdn_decay_freqs, fdn_t60s, DisplayName="Optimized");
 plot(decayFitNet_Freqs, tVals_optimized, DisplayName="Optimized - DecayFitNet");
 hold off;
 legend();
 grid();
-ylim([0 1.5*max([fdn_t60s(:); tVals_decayfitnet(:);tVals_optimized(:)])]);
+ylim([0 1.5*max(tVals_decayfitnet(:))]);
+% ylim([0 1.5*max([fdn_t60s(:); tVals_decayfitnet(:);tVals_optimized(:)])]);
 
 
 

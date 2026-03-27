@@ -1,90 +1,91 @@
-ir = "../rirs/treble/living_room1/living_room1_000.wav"
-num_channels = 8
+ir = "../rirs/py_rirs/rir_hallway.wav"
+num_channels = 6
 spectral_flatness_weight = 1
 sparsity_weight = 0.5
 power_envelope_weight = 0
 edc_weight = 0.1
 mel_edr_weight = 1
+weighted_edr_weight = 0
 randomize_initial_params = false
 random_delays = false
 save_output = true
 verbose = true
-gradient_delta = 1e-3
-gradient_delta_filter = 0.01
+
+[L-BFGS]
+num_basis = 292
+max_iterations = 1301945
+wolfe =  0.949
+min_gradient_norm = 1e-6
+factor = 1e-15
+max_line_search = 31
+min_step = 1e-20
+max_step =  1e20
+gradient_delta = 0.0001
 
 [Adam]
-step_size = 0.4539999999999996
+step_size = 0.442
 beta1 = 0.9
-beta2 = 0.999
+beta2 = 0.851
 tolerance = 1e-5
-gradient_delta = 0.03935707851130453
+gradient_delta = 1e-2
 
 [SPSA]
-alpha = 0.484
-gamma = 0.9375
-step_size = 0.605
-evaluation_step_size = 0.7446
-max_iterations = 1000
+alpha = 0.2880938193488607
+gamma = 0.7373144814549601
+step_size = 1.6640000000000001
+evaluation_step_size = 1.132721870064672
+max_iterations = 1000000
 tolerance = 1e-5
 
 [SimulatedAnnealing]
-max_iterations = 10000000
-initial_temperature = 100
-init_moves = 10000
-move_ctrl_sweep = 6
-max_tolerance_sweep = 3
-max_move_coeff = 6.0
-init_move_coeff = 1.4
-gain = 0.1
+max_iterations = 1000000
+initial_temperature = 5
+init_moves = 10
+move_ctrl_sweep = 1
+max_tolerance_sweep = 10
+max_move_coeff = 30.442
+init_move_coeff = 2
+gain = 1.8
 tolerance = 1e-5
 
 [CNE]
-population_size = 5000
-max_generation = 5000
-mutation_probability = 0.3
-mutation_size = 0.1
-select_percent = 0.9
+population_size = 5200
+max_generations = 7470
+mutation_probability = 0.737
+mutation_size = 0.171
+select_percent = 0.72
 tolerance = 1e-5
 
 [DifferentialEvolution]
-population_size = 10000
-max_generation = 2000
-crossover_rate = 0.6
-differential_weight = 0.8
+population_size = 3390
+max_generations = 8960
+crossover_rate = 1.0
+differential_weight = 0.81
 tolerance = 1e-5
 
 [PSO]
-num_particles = 100
-max_iterations = 500
-horizon_size = 360
+num_particles = 49
+max_iterations = 4060
+horizon_size = 410
 tolerance = 1e-5
-exploitation_factor = 2.05
+exploitation_factor = 2.123
 exploration_factor = 2.05
 
-[L-BFGS]
-num_basis = 30
-max_iterations = 1000
-wolfe = 0.9
-min_gradient_norm = 1e-6
-factor = 1e-15
-max_line_search = 50
-min_step = 1e-20
-max_step = 1e20
-
 [GradientDescent]
-step_size = 0.5
-max_iterations = 200
-tolerance = 1e-4
+step_size = 2
+max_iterations = 10000000000
+tolerance = 1e-5
 kappa = 0.01
 phi = 0.01
-momentum = 0.865
-min_gain = 1e-10
+momentum = 0.812
+min_gain = 1e-2
+gradient_delta = 1e-1
 
 [CMAES]
-population_size = 0
-max_iterations = 1000
-tolerance = 1e-5
-step_size = 0
+population_size = 10
+max_iterations = 1000000000
+tolerance = 1e-4
+step_size = 0.108
 
 [RandomSearch]
 time_limit = 10.0

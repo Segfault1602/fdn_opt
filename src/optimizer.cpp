@@ -158,17 +158,18 @@ class OptimCallback
     }
 
     template <typename FunctionType>
-    void SaveLossHistory(FunctionType& function, double objective)
+    void SaveLossHistory(FunctionType&, double objective)
     {
         {
             std::scoped_lock lock(mutex_);
             loss_history_.push_back(objective);
         }
 
-        assert(individual_losses_.size() == function.last_losses_.size());
-        for (size_t i = 0; i < function.last_losses_.size(); ++i)
+        auto individual_losses = LossRegistry::Instance().GetLosses();
+        assert(individual_losses_.size() == individual_losses.size());
+        for (size_t i = 0; i < individual_losses.size(); ++i)
         {
-            individual_losses_[i].push_back(function.last_losses_[i]);
+            individual_losses_[i].push_back(individual_losses[i]);
         }
     }
 
@@ -471,9 +472,16 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     LOG_INFO(logger_, "Optimization thread started.");
     status_.store(OptimizationStatus::Running);
 
-    const bool optimizing_filters =
+    bool optimizing_filters =
         std::ranges::find(info.parameters_to_optimize, fdn_optimization::OptimizationParamType::AttenuationFilters) !=
         info.parameters_to_optimize.end();
+
+    optimizing_filters |= (std::ranges::find(info.parameters_to_optimize,
+                                             fdn_optimization::OptimizationParamType::TonecorrectionFilters) !=
+                           info.parameters_to_optimize.end());
+    optimizing_filters |= (std::ranges::find(info.parameters_to_optimize,
+                                             fdn_optimization::OptimizationParamType::AttenuationFilters_3Band) !=
+                           info.parameters_to_optimize.end());
 
     if (optimizing_filters && info.target_rir.empty())
     {
@@ -491,10 +499,27 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     }
 
     FDNModel model(info.initial_fdn_config, info.ir_size, info.parameters_to_optimize, info.gradient_method);
-    model.SetGradientDelta(info.gradient_delta);
+
+    double gradient_delta = std::visit(
+        [](auto&& params) -> double {
+            using T = std::decay_t<decltype(params)>;
+            if constexpr (std::is_same_v<T, AdamParameters> || std::is_same_v<T, L_BFGSParameters> ||
+                          std::is_same_v<T, GradientDescentParameters>)
+            {
+                return params.gradient_delta;
+            }
+            else
+            {
+                return 1e-4; // Default gradient delta for other optimizers when optimizing filters
+            }
+        },
+        info.optimizer_params);
+
+    model.SetGradientDelta(gradient_delta);
+
     LOG_INFO(logger_, "Gradient method: {}, Gradient delta: {}",
              info.gradient_method == GradientMethod::CentralDifferences ? "Central Differences" : "Forward Differences",
-             info.gradient_delta);
+             gradient_delta);
 
     std::vector<LossFunction> loss_functions;
 
@@ -503,19 +528,6 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         if (info.edc_weight > 0.0)
         {
             LOG_INFO(logger_, "Adding EDC loss with weight {}", info.edc_weight);
-            // auto target_edc_octaves = audio_utils::analysis::EnergyDecayCurve_FilterBank(info.target_rir, true);
-            // // use shared_ptr to capture in lambda
-            // auto target_edc_octaves_ptr =
-            //     std::make_shared<std::array<std::vector<float>, audio_utils::analysis::kNumOctaveBands>>(
-            //         std::move(target_edc_octaves));
-
-            // LossFunction edc_loss;
-            // edc_loss.func = [target_edc_octaves_ptr](std::span<const float> signal) -> double {
-            //     return EDCLoss(signal, *target_edc_octaves_ptr);
-            // };
-            // edc_loss.weight = 1.0;
-            // edc_loss.name = "EDC Relief Loss";
-            // loss_functions.push_back(edc_loss);
 
             auto target_edc = audio_utils::analysis::EnergyDecayCurve(info.target_rir, false);
             auto target_edc_ptr = std::make_shared<std::vector<float>>(std::move(target_edc));
@@ -538,6 +550,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
             edr_options.window_size = info.mel_edr_window_size;
             edr_options.window_type = audio_utils::FFTWindowType::Hann;
             edr_options.n_mels = info.mel_edr_num_bands;
+            edr_options.to_db = true;
 
             auto target_edr_result = audio_utils::analysis::EnergyDecayRelief(info.target_rir, edr_options);
 
@@ -552,6 +565,31 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
             edr_loss.name = "EDR Loss";
             loss_functions.push_back(edr_loss);
         }
+
+        if (info.weighted_edr_weight > 0.0)
+        {
+            LOG_INFO(logger_, "Adding Weighted EDR loss with weight {}", info.weighted_edr_weight);
+            audio_utils::analysis::EnergyDecayReliefOptions edr_options;
+            edr_options.fft_length = info.mel_edr_fft_length;
+            edr_options.hop_size = info.mel_edr_hop_size;
+            edr_options.window_size = info.mel_edr_window_size;
+            edr_options.window_type = audio_utils::FFTWindowType::Hann;
+            edr_options.n_mels = info.mel_edr_num_bands;
+            edr_options.to_db = true;
+
+            auto target_edr_result = audio_utils::analysis::EnergyDecayRelief(info.target_rir, edr_options);
+
+            auto target_edr_result_ptr =
+                std::make_shared<audio_utils::analysis::EnergyDecayReliefResult>(std::move(target_edr_result));
+
+            LossFunction edr_loss;
+            edr_loss.func = [target_edr_result_ptr, edr_options](std::span<const float> signal) -> double {
+                return WeightedEDRLoss(signal, *target_edr_result_ptr, edr_options);
+            };
+            edr_loss.weight = info.weighted_edr_weight;
+            edr_loss.name = "Weighted EDR Loss";
+            loss_functions.push_back(edr_loss);
+        }
     }
     else
     {
@@ -562,6 +600,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
             spectral_flatness_loss.func = [&](std::span<const float> signal) -> double {
                 double spectral_flatness = SpectralFlatnessLoss(signal);
                 return std::abs(0.5575f - spectral_flatness);
+                // return 1.0 - spectral_flatness; // Maximize spectral flatness by minimizing 1 - flatness
             };
             spectral_flatness_loss.weight = info.spectral_flatness_weight;
             spectral_flatness_loss.name = "Spectral Flatness Loss";
@@ -593,17 +632,31 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
             sparsity_loss.name = "Sparsity Loss";
             loss_functions.push_back(sparsity_loss);
         }
+
+        // constexpr float kMixingTimeLossWeight = 0.1f;
+        // LOG_INFO(logger_, "Adding Mixing time loss with weight {}", kMixingTimeLossWeight);
+        // LossFunction mixing_time_loss;
+        // mixing_time_loss.func = [&](std::span<const float> signal) -> double {
+        //     constexpr uint32_t kSampleRate = 48000;
+        //     double mixing_time = MixingTimeLoss(signal, kSampleRate);
+        //     return mixing_time;
+        // };
+        // mixing_time_loss.weight = kMixingTimeLossWeight;
+        // mixing_time_loss.name = "Mixing Time Loss";
+        // loss_functions.push_back(mixing_time_loss);
     }
 
     model.SetLossFunctions(loss_functions);
 
     arma::mat params = model.GetInitialParams();
-    // LOG_INFO(logger_, "Initial config:");
-    // logger_->set_immediate_flush(1);
-    // model.PrintFDNConfig(params);
-    // std::stringstream param_stream;
-    // param_stream << params;
-    // LOG_INFO(logger_, "Initial parameters: {}", param_stream.str());
+    std::string initial_config_str = model.PrintFDNConfig(params);
+    LOG_INFO(logger_, "Initial config: {}", initial_config_str);
+    std::stringstream param_stream;
+    param_stream << params;
+    LOG_INFO(logger_, "Initial parameters: {}", param_stream.str());
+
+    auto initial_loss = model.Evaluate(params);
+    LOG_INFO(logger_, "Initial loss: {}", initial_loss);
 
     sfFDN::FDNConfig initial_config = model.GetFDNConfig(params);
 
@@ -613,14 +666,12 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     std::visit(visitor, info.optimizer_params);
 
     double final_loss = model.Evaluate(params);
+    LOG_INFO(logger_, "Final loss: {}", final_loss);
     std::string final_config_str = model.PrintFDNConfig(params);
     LOG_INFO(logger_, "Final config:\n{}", final_config_str);
-    // param_stream.str("");
-    // param_stream << params;
-    // LOG_INFO(logger_, "Optimization finished. Final parameters: {}", param_stream.str());
-    // LOG_INFO(logger_, "Final loss: {:.6f}", final_loss);
-    // LOG_INFO(logger_, "Final config:");
-    // model.PrintFDNConfig(params);
+    param_stream.str("");
+    param_stream << params;
+    LOG_INFO(logger_, "Optimization finished. Final parameters: {}", param_stream.str());
 
     {
         std::scoped_lock lock(mutex_);
