@@ -510,7 +510,7 @@ FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
     }
 }
 
-void FDNModel::SetLossFunctions(const std::vector<LossFunction>& loss_functions)
+void FDNModel::SetLossFunctions(const std::vector<std::shared_ptr<AudioLoss>>& loss_functions)
 {
     loss_functions_ = loss_functions;
 }
@@ -622,11 +622,11 @@ double FDNModel::Evaluate(const arma::mat& params)
     std::vector<double> last_losses;
     for (const auto& loss_function : loss_functions_)
     {
-        double loss = loss_function.func(ir);
+        double loss = loss_function->ComputeLoss(ir);
         assert(!std::isnan(loss));
         assert(!std::isinf(loss));
-        last_losses.push_back(loss_function.weight * loss);
-        total_loss += loss_function.weight * loss;
+        last_losses.push_back(loss);
+        total_loss += loss;
     }
 
     ReturnVectorToPool(std::move(ir));

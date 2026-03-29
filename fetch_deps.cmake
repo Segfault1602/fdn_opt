@@ -1,7 +1,7 @@
 # Dependency that should already be installed on the system:
 find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
-find_package(OpenMP)
+find_package(OpenMP REQUIRED)
 
 include(FetchContent)
 
@@ -67,6 +67,7 @@ cpmaddpackage(
   "gh:Segfault1602/audio_utils#main"
   OPTIONS
   "AUDIO_UTILS_USE_RTAUDIO OFF"
+  "AUDIO_UTILS_USE_SNDFILE ON"
   "AUDIO_UTILS_ENABLE_HARDENING ON"
   "AUDIO_UTILS_USE_SANITIZER OFF")
 
@@ -77,3 +78,16 @@ cpmaddpackage(
   https://github.com/Segfault1602/sfFDN.git
   GIT_TAG
   main)
+
+cpmaddpackage(
+  NAME
+  Eigen
+  GIT_TAG
+  5.0.1
+  GIT_REPOSITORY
+  https://gitlab.com/libeigen/eigen)
+
+if(Eigen_ADDED)
+  get_target_property(_eigen_inc eigen INTERFACE_INCLUDE_DIRECTORIES)
+  target_include_directories(eigen SYSTEM INTERFACE ${_eigen_inc})
+endif()

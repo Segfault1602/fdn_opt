@@ -21,7 +21,7 @@ struct LossFunction
 
 float RMS(std::span<const float> signal);
 
-float SpectralFlatnessLoss(std::span<const float> signal);
+// float SpectralFlatnessLoss(std::span<const float> signal);
 
 float RMSLoss(std::span<const float> signal, float target_rms);
 
@@ -45,12 +45,13 @@ struct MultiResolutionSTFTLossOptions
 float MultiResolutionSTFTLoss(std::span<const float> signal, std::span<audio_utils::analysis::STFTResult> target_stfts,
                               const MultiResolutionSTFTLossOptions& options);
 
+/*
 float EDCLoss(std::span<const float> signal, const std::vector<float>& target_edc);
 
 float EDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
-              const audio_utils::analysis::EnergyDecayReliefOptions& options);
+const audio_utils::analysis::EnergyDecayReliefOptions& options);
 
 float WeightedEDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
-                      const audio_utils::analysis::EnergyDecayReliefOptions& options);
-
+const audio_utils::analysis::EnergyDecayReliefOptions& options);
+*/
 } // namespace fdn_optimization

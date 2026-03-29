@@ -1,5 +1,6 @@
 #include "optimizer.h"
 
+#include "audio_loss.h"
 #include "model.h"
 #include "random_searcher.h"
 #include <audio_utils/audio_analysis.h>
@@ -46,6 +47,7 @@ class OptimCallback
         {
             starting_step_size_ = optimizer.StepSize();
         }
+
         auto loss_functions = function.GetLossFunctions();
         {
             std::scoped_lock lock(mutex_);
@@ -527,7 +529,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
              info.gradient_method == GradientMethod::CentralDifferences ? "Central Differences" : "Forward Differences",
              gradient_delta);
 
-    std::vector<LossFunction> loss_functions;
+    std::vector<std::shared_ptr<AudioLoss>> loss_functions;
 
     if (optimizing_filters)
     {
@@ -535,16 +537,19 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         {
             LOG_INFO(logger_, "Adding EDC loss with weight {}", info.edc_weight);
 
-            auto target_edc = audio_utils::analysis::EnergyDecayCurve(info.target_rir, false);
-            auto target_edc_ptr = std::make_shared<std::vector<float>>(std::move(target_edc));
-
-            LossFunction edc_loss;
-            edc_loss.func = [target_edc_ptr](std::span<const float> signal) -> double {
-                return EDCLoss(signal, *target_edc_ptr);
-            };
-            edc_loss.weight = info.edc_weight;
-            edc_loss.name = "EDC Loss";
+            auto edc_loss = std::make_shared<EnergyDecayCurveLoss>(info.target_rir, info.edc_weight);
             loss_functions.push_back(edc_loss);
+
+            // auto target_edc = audio_utils::analysis::EnergyDecayCurve(info.target_rir, false);
+            // auto target_edc_ptr = std::make_shared<std::vector<float>>(std::move(target_edc));
+
+            // LossFunction edc_loss;
+            // edc_loss.func = [target_edc_ptr](std::span<const float> signal) -> double {
+            //     return EDCLoss(signal, *target_edc_ptr);
+            // };
+            // edc_loss.weight = info.edc_weight;
+            // edc_loss.name = "EDC Loss";
+            // loss_functions.push_back(edc_loss);
         }
 
         if (info.mel_edr_weight > 0.0)
@@ -558,18 +563,28 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
             edr_options.n_mels = info.mel_edr_num_bands;
             edr_options.to_db = true;
 
-            auto target_edr_result = audio_utils::analysis::EnergyDecayRelief(info.target_rir, edr_options);
-
-            auto target_edr_result_ptr =
-                std::make_shared<audio_utils::analysis::EnergyDecayReliefResult>(std::move(target_edr_result));
-
-            LossFunction edr_loss;
-            edr_loss.func = [target_edr_result_ptr, edr_options](std::span<const float> signal) -> double {
-                return EDRLoss(signal, *target_edr_result_ptr, edr_options);
-            };
-            edr_loss.weight = info.mel_edr_weight;
-            edr_loss.name = "EDR Loss";
+            auto edr_loss = std::make_shared<EnergyDecayReliefLoss>(info.target_rir, edr_options, info.mel_edr_weight);
             loss_functions.push_back(edr_loss);
+            // audio_utils::analysis::EnergyDecayReliefOptions edr_options;
+            // edr_options.fft_length = info.mel_edr_fft_length;
+            // edr_options.hop_size = info.mel_edr_hop_size;
+            // edr_options.window_size = info.mel_edr_window_size;
+            // edr_options.window_type = audio_utils::FFTWindowType::Hann;
+            // edr_options.n_mels = info.mel_edr_num_bands;
+            // edr_options.to_db = true;
+
+            // auto target_edr_result = audio_utils::analysis::EnergyDecayRelief(info.target_rir, edr_options);
+
+            // auto target_edr_result_ptr =
+            //     std::make_shared<audio_utils::analysis::EnergyDecayReliefResult>(std::move(target_edr_result));
+
+            // LossFunction edr_loss;
+            // edr_loss.func = [target_edr_result_ptr, edr_options](std::span<const float> signal) -> double {
+            //     return EDRLoss(signal, *target_edr_result_ptr, edr_options);
+            // };
+            // edr_loss.weight = info.mel_edr_weight;
+            // edr_loss.name = "EDR Loss";
+            // loss_functions.push_back(edr_loss);
         }
 
         if (info.weighted_edr_weight > 0.0)
@@ -583,18 +598,22 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
             edr_options.n_mels = info.mel_edr_num_bands;
             edr_options.to_db = true;
 
-            auto target_edr_result = audio_utils::analysis::EnergyDecayRelief(info.target_rir, edr_options);
+            auto weighted_edr_loss =
+                std::make_shared<WeightedEDRLoss>(info.target_rir, edr_options, -20.0f, info.weighted_edr_weight);
+            loss_functions.push_back(weighted_edr_loss);
 
-            auto target_edr_result_ptr =
-                std::make_shared<audio_utils::analysis::EnergyDecayReliefResult>(std::move(target_edr_result));
+            // auto target_edr_result = audio_utils::analysis::EnergyDecayRelief(info.target_rir, edr_options);
 
-            LossFunction edr_loss;
-            edr_loss.func = [target_edr_result_ptr, edr_options](std::span<const float> signal) -> double {
-                return WeightedEDRLoss(signal, *target_edr_result_ptr, edr_options);
-            };
-            edr_loss.weight = info.weighted_edr_weight;
-            edr_loss.name = "Weighted EDR Loss";
-            loss_functions.push_back(edr_loss);
+            // auto target_edr_result_ptr =
+            //     std::make_shared<audio_utils::analysis::EnergyDecayReliefResult>(std::move(target_edr_result));
+
+            // LossFunction edr_loss;
+            // edr_loss.func = [target_edr_result_ptr, edr_options](std::span<const float> signal) -> double {
+            //     return WeightedEDRLoss(signal, *target_edr_result_ptr, edr_options);
+            // };
+            // edr_loss.weight = info.weighted_edr_weight;
+            // edr_loss.name = "Weighted EDR Loss";
+            // loss_functions.push_back(edr_loss);
         }
     }
     else
@@ -602,41 +621,47 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         if (info.spectral_flatness_weight > 0.0)
         {
             LOG_INFO(logger_, "Adding spectral flatness loss with weight {}", info.spectral_flatness_weight);
-            LossFunction spectral_flatness_loss;
-            spectral_flatness_loss.func = [&](std::span<const float> signal) -> double {
-                double spectral_flatness = SpectralFlatnessLoss(signal);
-                return std::abs(0.5575f - spectral_flatness);
-                // return 1.0 - spectral_flatness; // Maximize spectral flatness by minimizing 1 - flatness
-            };
-            spectral_flatness_loss.weight = info.spectral_flatness_weight;
-            spectral_flatness_loss.name = "Spectral Flatness Loss";
+            constexpr float kTargetSpectralFlatness = 0.5575f;
+            auto spectral_flatness_loss =
+                std::make_shared<SpectralFlatnessLoss>(kTargetSpectralFlatness, info.spectral_flatness_weight);
             loss_functions.push_back(spectral_flatness_loss);
+            // LossFunction spectral_flatness_loss;
+            // spectral_flatness_loss.func = [&](std::span<const float> signal) -> double {
+            //     double spectral_flatness = SpectralFlatnessLoss(signal);
+            //     return std::abs(0.5575f - spectral_flatness);
+            //     // return 1.0 - spectral_flatness; // Maximize spectral flatness by minimizing 1 - flatness
+            // };
+            // spectral_flatness_loss.weight = info.spectral_flatness_weight;
+            // spectral_flatness_loss.name = "Spectral Flatness Loss";
+            // loss_functions.push_back(spectral_flatness_loss);
         }
 
-        if (info.power_envelope_weight > 0.0)
-        {
-            LOG_INFO(logger_, "Adding power envelope loss with weight {}", info.power_envelope_weight);
-            LossFunction power_env_loss;
-            power_env_loss.func = [&](std::span<const float> signal) -> double {
-                constexpr uint32_t kSampleRate = 48000;
-                return PowerEnvelopeLoss(signal, 1024, 128, kSampleRate);
-            };
-            power_env_loss.weight = info.power_envelope_weight;
-            power_env_loss.name = "Power Envelope Loss";
-            loss_functions.push_back(power_env_loss);
-        }
+        // if (info.power_envelope_weight > 0.0)
+        // {
+        //     LOG_INFO(logger_, "Adding power envelope loss with weight {}", info.power_envelope_weight);
+        //     LossFunction power_env_loss;
+        //     power_env_loss.func = [&](std::span<const float> signal) -> double {
+        //         constexpr uint32_t kSampleRate = 48000;
+        //         return PowerEnvelopeLoss(signal, 1024, 128, kSampleRate);
+        //     };
+        //     power_env_loss.weight = info.power_envelope_weight;
+        //     power_env_loss.name = "Power Envelope Loss";
+        //     loss_functions.push_back(power_env_loss);
+        // }
 
         if (info.sparsity_weight > 0.0)
         {
             LOG_INFO(logger_, "Adding sparsity loss with weight {}", info.sparsity_weight);
-            LossFunction sparsity_loss;
-            sparsity_loss.func = [&](std::span<const float> signal) -> double {
-                double sparsity = SparsityLoss(signal.subspan(0, 4096));
-                return sparsity;
-            };
-            sparsity_loss.weight = info.sparsity_weight;
-            sparsity_loss.name = "Sparsity Loss";
+            auto sparsity_loss = std::make_shared<TimeDomainSparsityLoss>(info.sparsity_weight);
             loss_functions.push_back(sparsity_loss);
+            // LossFunction sparsity_loss;
+            // sparsity_loss.func = [&](std::span<const float> signal) -> double {
+            //     double sparsity = SparsityLoss(signal.subspan(0, 4096));
+            //     return sparsity;
+            // };
+            // sparsity_loss.weight = info.sparsity_weight;
+            // sparsity_loss.name = "Sparsity Loss";
+            // loss_functions.push_back(sparsity_loss);
         }
 
         // constexpr float kMixingTimeLossWeight = 0.1f;
@@ -695,7 +720,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         auto loss_functions = model.GetLossFunctions();
         for (const auto& lf : loss_functions)
         {
-            optimization_result_.loss_names.push_back(lf.name);
+            optimization_result_.loss_names.push_back(lf->GetName());
         }
     }
 

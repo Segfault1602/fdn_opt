@@ -3,7 +3,7 @@ target_sources(
   fdn_optimization
   PRIVATE optimizer.cpp
           model.cpp
-          loss.cpp
+          audio_loss.cpp
           random_searcher.cpp
   PUBLIC FILE_SET
          "fdn_optimization_headers"
@@ -14,7 +14,7 @@ target_sources(
          FILES
          ./../include/fdn_opt/optimizer.h
          ./../include/fdn_opt/model.h
-         ./../include/fdn_opt/loss.h
+         ./../include/fdn_opt/audio_loss.h
          ./../include/fdn_opt/optim_types.h)
 
 target_link_libraries(
@@ -22,6 +22,7 @@ target_link_libraries(
   PRIVATE audio_utils::audio_utils
           sfFDN.sfFDN
           quill::quill
+          Eigen3::Eigen
           Armadillo::Armadillo
           ensmallen
           FdnOpt::FdnOpt_options

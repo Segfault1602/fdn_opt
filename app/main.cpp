@@ -15,6 +15,8 @@
 #include <quill/Frontend.h>
 #include <quill/LogMacros.h>
 
+#include <omp.h>
+
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -80,7 +82,7 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
     if (randomize)
     {
         std::cout << "Using random initial parameters..." << std::endl;
-        arma::arma_rng::set_seed_random();
+        // arma::arma_rng::set_seed_random();
         arma::fvec input_gains(fdn_order, arma::fill::randn);
         arma::fvec output_gains(fdn_order, arma::fill::randn);
 
@@ -440,6 +442,13 @@ int main(int argc, char** argv)
         logger->set_log_level(quill::LogLevel::Debug);
     }
 
+    auto omp_num_threads = omp_get_max_threads();
+#ifdef __APPLE__
+    omp_set_num_threads(std::min(4, omp_num_threads));
+    omp_num_threads = omp_get_max_threads();
+#endif
+    LOG_INFO(logger, "Using up to {} threads for optimization.", omp_num_threads);
+
     auto config_filename = app.get_config_ptr()->as<std::string>();
     LOG_INFO(logger, "Using configuration file: {}", config_filename);
 
@@ -447,7 +456,11 @@ int main(int argc, char** argv)
     LOG_INFO(logger, "Selected optimization algorithm: {}", selected_optimizer);
 
     auto now = std::chrono::system_clock::now();
+#ifndef __APPLE__
     auto local_now = std::chrono::current_zone()->to_local(std::chrono::floor<std::chrono::seconds>(now));
+#else
+    auto local_now = std::chrono::floor<std::chrono::seconds>(now);
+#endif
 
     std::string timestamp = std::format("{:%Y%m%d_%H%M%S}", local_now);
     LOG_INFO(logger, "Optimization timestamp: {}", timestamp);

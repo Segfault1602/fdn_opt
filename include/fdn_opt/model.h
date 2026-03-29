@@ -4,10 +4,12 @@
 #include <audio_utils/fft.h>
 #include <sffdn/sffdn.h>
 
+#include "audio_loss.h"
 #include "loss.h"
 #include "optim_types.h"
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -46,9 +48,9 @@ class FDNModel
     FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size, std::span<const OptimizationParamType> param_types,
              GradientMethod gradient_method = GradientMethod::CentralDifferences);
 
-    void SetLossFunctions(const std::vector<LossFunction>& loss_functions);
+    void SetLossFunctions(const std::vector<std::shared_ptr<AudioLoss>>& loss_functions);
 
-    std::vector<LossFunction> GetLossFunctions() const
+    const std::vector<std::shared_ptr<AudioLoss>>& GetLossFunctions() const
     {
         return loss_functions_;
     }
@@ -98,7 +100,9 @@ class FDNModel
     uint32_t ir_size_;
     std::vector<float> impulse_buffer_;
     std::vector<float> response_buffer_;
-    std::vector<LossFunction> loss_functions_;
+
+    // I don't think there is a reason for these to be shared_ptrs outiside of my own laziness.
+    std::vector<std::shared_ptr<AudioLoss>> loss_functions_;
 
     std::vector<float> matrix_coeffs_;
     std::vector<OptimizationParamType> param_types_;

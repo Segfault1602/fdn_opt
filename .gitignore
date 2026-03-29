@@ -1,6 +1,7 @@
 # Build directories and binary files
 build/
 out/
+optim_output/
 out/coverage/*
 cmake-build-*/
 conan-cache/

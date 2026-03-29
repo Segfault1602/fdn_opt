@@ -3,7 +3,8 @@
 #include <audio_utils/audio_analysis.h>
 #include <audio_utils/fft.h>
 
-#include <armadillo>
+#include <Eigen/Core>
+// #include <armadillo>
 
 #include <cassert>
 #include <list>
@@ -46,26 +47,64 @@ enum class ReductionType
     NormalizedMean
 };
 
-template <typename T>
-float L1Loss(const T& signal, const T& target, ReductionType reduction = ReductionType::NormalizedMean)
+template <typename Derived>
+float L1Loss(const Eigen::ArrayBase<Derived>& signal, const Eigen::ArrayBase<Derived>& target,
+             ReductionType reduction = ReductionType::NormalizedMean)
 {
-    auto loss = arma::abs(signal - target);
+    auto loss = (signal - target).abs();
     switch (reduction)
     {
     case ReductionType::Mean:
-        return arma::mean(loss);
+        return loss.mean();
     case ReductionType::Sum:
-        return arma::accu(loss);
+        return loss.sum();
     case ReductionType::NormalizedMean:
-        return arma::accu(loss) / arma::accu(arma::abs(target));
+        return loss.sum() / target.cwiseAbs().sum();
     }
-    // return arma::accu(arma::abs(signal - target)) / arma::accu(arma::abs(target));
 }
 
-template <typename T>
-float L2Loss(const T& signal, const T& target)
+template <typename Derived>
+float SpectralConvergenceLoss(const Eigen::ArrayBase<Derived>& signal, const Eigen::ArrayBase<Derived>& target)
 {
-    return arma::accu(arma::square(signal - target)) / arma::accu(arma::square(target));
+    return (signal - target).matrix().norm() / target.matrix().norm();
+}
+
+// template <typename T>
+// float L1Loss(const T& signal, const T& target, ReductionType reduction = ReductionType::NormalizedMean)
+// {
+//     auto loss = arma::abs(signal - target);
+//     switch (reduction)
+//     {
+//     case ReductionType::Mean:
+//         return arma::mean(loss);
+//     case ReductionType::Sum:
+//         return arma::accu(loss);
+//     case ReductionType::NormalizedMean:
+//         return arma::accu(loss) / arma::accu(arma::abs(target));
+//     }
+//     // return arma::accu(arma::abs(signal - target)) / arma::accu(arma::abs(target));
+// }
+
+// template <typename T>
+// float L2Loss(const T& signal, const T& target)
+// {
+//     return arma::accu(arma::square(signal - target)) / arma::accu(arma::square(target));
+// }
+
+template <typename Derived>
+float L2Loss(const Eigen::ArrayBase<Derived>& signal, const Eigen::ArrayBase<Derived>& target,
+             ReductionType reduction = ReductionType::NormalizedMean)
+{
+    auto diff = (signal - target).square();
+    switch (reduction)
+    {
+    case ReductionType::Mean:
+        return diff.mean();
+    case ReductionType::Sum:
+        return diff.sum();
+    case ReductionType::NormalizedMean:
+        return diff.sum() / target.square().sum();
+    }
 }
 
 } // namespace
@@ -85,22 +124,19 @@ float RMS(std::span<const float> signal)
     return rms;
 }
 
-float SpectralFlatnessLoss(std::span<const float> signal)
-{
-    // uint32_t fft_size = std::max(static_cast<uint32_t>(signal.size()), static_cast<uint32_t>(48000));
-    uint32_t fft_size = signal.size();
-    auto fft_ptr = BorrowFFTForSize(fft_size);
+// float SpectralFlatnessLoss(std::span<const float> signal)
+// {
+//     uint32_t fft_size = signal.size();
+//     auto fft_ptr = BorrowFFTForSize(fft_size);
 
-    std::vector<float> spectrum((fft_ptr->GetFFTSize() / 2) + 1, 0.0f);
-    fft_ptr->ForwardMag(signal, std::span(spectrum),
-                        {.output_type = audio_utils::FFTOutputType::Power, .to_db = false});
-    ReturnFFTToPool(std::move(fft_ptr));
+//     std::vector<float> spectrum((fft_ptr->GetFFTSize() / 2) + 1, 0.0f);
+//     fft_ptr->ForwardMag(signal, std::span(spectrum),
+//                         {.output_type = audio_utils::FFTOutputType::Power, .to_db = false});
+//     ReturnFFTToPool(std::move(fft_ptr));
 
-    float flatness = audio_utils::analysis::SpectralFlatness(spectrum);
-    // return 1.f - flatness;
-    // return std::abs(flatness - 0.55f);
-    return flatness;
-}
+//     float flatness = audio_utils::analysis::SpectralFlatness(spectrum);
+//     return flatness;
+// }
 
 float RMSLoss(std::span<const float> signal, float target_rms)
 {
@@ -140,6 +176,7 @@ float PowerEnvelopeLoss(std::span<const float> signal, uint32_t window_size, uin
     return 1.f;
 }
 
+/*
 float MixingTimeLoss(std::span<const float> signal, uint32_t sample_rate)
 {
     constexpr float kWindowSizeMs = 20.0f;
@@ -179,140 +216,147 @@ float MixingTimeLoss(std::span<const float> signal, uint32_t sample_rate)
 
     return mixing_time;
 }
+    */
 
-float SparsityLoss(std::span<const float> signal)
-{
-    // Time domain sparsity loss from [1] G. Dal Santo, K. Prawda, S. J. Schlecht, and V. Välimäki, “Differentiable
-    // Feedback Delay Network for Colorless Reverberation,” in Proceedings of the 26th International Conference on
-    // Digital Audio Effects (DAFx23), Sept. 2023.
+// float SparsityLoss(std::span<const float> signal)
+// {
+//     // Time domain sparsity loss from [1] G. Dal Santo, K. Prawda, S. J. Schlecht, and V. Välimäki, “Differentiable
+//     // Feedback Delay Network for Colorless Reverberation,” in Proceedings of the 26th International Conference on
+//     // Digital Audio Effects (DAFx23), Sept. 2023.
 
-    float l1_norm = 0.0f;
-    float l2_norm = 0.0f;
-    for (const auto& sample : signal)
-    {
-        l1_norm += std::abs(sample);
-        l2_norm += sample * sample;
-    }
+//     float l1_norm = 0.0f;
+//     float l2_norm = 0.0f;
+//     for (const auto& sample : signal)
+//     {
+//         l1_norm += std::abs(sample);
+//         l2_norm += sample * sample;
+//     }
 
-    l2_norm = std::sqrt(l2_norm);
-    return l2_norm / l1_norm;
-}
+//     l2_norm = std::sqrt(l2_norm);
+//     return l2_norm / l1_norm;
+// }
 
-float MultiResolutionSTFTLoss(std::span<const float> signal, std::span<audio_utils::analysis::STFTResult> target_stfts,
-                              const MultiResolutionSTFTLossOptions& options)
-{
-    float total_loss = 0.0f;
+// float MultiResolutionSTFTLoss(std::span<const float> signal, std::span<audio_utils::analysis::STFTResult>
+// target_stfts,
+//                               const MultiResolutionSTFTLossOptions& options)
+// {
+//     float total_loss = 0.0f;
 
-    [[maybe_unused]] const uint32_t num_combination = options.fft_sizes.size();
-    assert(target_stfts.size() == options.fft_sizes.size());
-    assert(options.fft_sizes.size() == num_combination);
-    assert(options.hop_sizes.size() == num_combination);
-    assert(options.window_sizes.size() == num_combination);
+//     [[maybe_unused]] const uint32_t num_combination = options.fft_sizes.size();
+//     assert(target_stfts.size() == options.fft_sizes.size());
+//     assert(options.fft_sizes.size() == num_combination);
+//     assert(options.hop_sizes.size() == num_combination);
+//     assert(options.window_sizes.size() == num_combination);
 
-    for (auto [fft_size, hop_size, window_size, target_stft] :
-         std::views::zip(options.fft_sizes, options.hop_sizes, options.window_sizes, target_stfts))
-    {
-        audio_utils::analysis::STFTOptions stft_options;
-        stft_options.fft_size = fft_size;
-        stft_options.overlap = window_size - hop_size;
-        stft_options.window_size = window_size;
-        stft_options.window_type = options.window_type;
+//     for (auto [fft_size, hop_size, window_size, target_stft] :
+//          std::views::zip(options.fft_sizes, options.hop_sizes, options.window_sizes, target_stfts))
+//     {
+//         audio_utils::analysis::STFTOptions stft_options;
+//         stft_options.fft_size = fft_size;
+//         stft_options.overlap = window_size - hop_size;
+//         stft_options.window_size = window_size;
+//         stft_options.window_type = options.window_type;
 
-        audio_utils::analysis::STFTResult stft_result;
-        if (options.mel_scale)
-        {
-            stft_result = audio_utils::analysis::MelSpectrogram(signal, stft_options, options.n_mels);
-        }
-        else
-        {
-            stft_result = audio_utils::analysis::STFT(signal, stft_options);
-        }
+//         audio_utils::analysis::STFTResult stft_result;
+//         if (options.mel_scale)
+//         {
+//             stft_result = audio_utils::analysis::MelSpectrogram(signal, stft_options, options.n_mels);
+//         }
+//         else
+//         {
+//             stft_result = audio_utils::analysis::STFT(signal, stft_options);
+//         }
 
-        if (stft_result.num_bins != target_stft.num_bins || stft_result.num_frames != target_stft.num_frames)
-        {
-            throw std::runtime_error("MultiResolutionSTFTLoss: STFT result size does not match target size.");
-        }
+//         if (stft_result.num_bins != target_stft.num_bins || stft_result.num_frames != target_stft.num_frames)
+//         {
+//             throw std::runtime_error("MultiResolutionSTFTLoss: STFT result size does not match target size.");
+//         }
 
-        const arma::fmat stft_mat(stft_result.data.data(), stft_result.num_bins, stft_result.num_frames);
-        const arma::fmat target_mat(const_cast<float*>(target_stft.data.data()), target_stft.num_bins,
-                                    target_stft.num_frames);
+//         const Eigen::Map<const Eigen::ArrayXXf> stft_mat(stft_result.data.data(), stft_result.num_bins,
+//                                                          stft_result.num_frames);
+//         const Eigen::Map<const Eigen::ArrayXXf> target_mat(target_stft.data.data(), target_stft.num_bins,
+//                                                            target_stft.num_frames);
+//         // float loss = L1Loss(stft_mat, target_mat, ReductionType::Mean);
+//         float spectral_convergence = SpectralConvergenceLoss(stft_mat, target_mat);
+//         total_loss += spectral_convergence;
+//     }
+//     return total_loss;
+// }
 
-        float loss = L1Loss(stft_mat.as_col(), target_mat.as_col());
-        total_loss += loss;
-    }
-    return total_loss;
-}
+// float EDCLoss(std::span<const float> signal, const std::vector<float>& target_edc)
+// {
+//     auto edc = audio_utils::analysis::EnergyDecayCurve(signal, false);
 
-float EDCLoss(std::span<const float> signal, const std::vector<float>& target_edc)
-{
-    auto edc = audio_utils::analysis::EnergyDecayCurve(signal, false);
+//     if (edc.size() != target_edc.size())
+//     {
+//         throw std::runtime_error("EDCLoss: EDC result size does not match target size.");
+//     }
 
-    if (edc.size() != target_edc.size())
-    {
-        throw std::runtime_error("EDCLoss: EDC result size does not match target size.");
-    }
+//     const Eigen::Map<const Eigen::ArrayXf> edc_vec(edc.data(), edc.size());
+//     const Eigen::Map<const Eigen::ArrayXf> target_vec(target_edc.data(), target_edc.size());
 
-    const arma::fvec edc_vec(const_cast<float*>(edc.data()), edc.size(), false, true);
-    const arma::fvec target_vec(const_cast<float*>(target_edc.data()), target_edc.size(), false, true);
+//     return L2Loss(edc_vec, target_vec);
+// }
 
-    return L2Loss(edc_vec, target_vec);
-}
+// float EDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
+//               const audio_utils::analysis::EnergyDecayReliefOptions& options)
+// {
+//     audio_utils::analysis::EnergyDecayReliefResult edr_result =
+//         audio_utils::analysis::EnergyDecayRelief(signal, options);
 
-float EDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
-              const audio_utils::analysis::EnergyDecayReliefOptions& options)
-{
-    audio_utils::analysis::EnergyDecayReliefResult edr_result =
-        audio_utils::analysis::EnergyDecayRelief(signal, options);
+//     if (edr_result.num_bins != target_edr.num_bins || edr_result.num_frames != target_edr.num_frames)
+//     {
+//         throw std::runtime_error("EDRLoss: EDR result size does not match target size.");
+//     }
 
-    if (edr_result.num_bins != target_edr.num_bins || edr_result.num_frames != target_edr.num_frames)
-    {
-        throw std::runtime_error("EDRLoss: EDR result size does not match target size.");
-    }
+//     const Eigen::Map<const Eigen::ArrayXXf> edr_mat(edr_result.data.data(), edr_result.num_bins,
+//     edr_result.num_frames); const Eigen::Map<const Eigen::ArrayXXf> target_mat(target_edr.data.data(),
+//     target_edr.num_bins,
+//                                                        target_edr.num_frames);
+//     // // Mezza et al. loss
+//     return L1Loss(edr_mat, target_mat, ReductionType::NormalizedMean);
 
-    const arma::fmat edr_mat(edr_result.data.data(), edr_result.num_bins, edr_result.num_frames);
-    const arma::fmat target_mat(const_cast<float*>(target_edr.data.data()), target_edr.num_bins, target_edr.num_frames);
+//     // St-Onge loss
+//     // float loss = arma::mean(arma::square(edr_vec - target_vec));
+//     // return std::sqrt(loss);
+// }
 
-    // Mezza et al. loss
-    return L1Loss(edr_mat.as_col(), target_mat.as_col());
+// float WeightedEDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult&
+// target_edr,
+//                       const audio_utils::analysis::EnergyDecayReliefOptions& options)
+// {
+//     audio_utils::analysis::EnergyDecayReliefResult edr_result =
+//         audio_utils::analysis::EnergyDecayRelief(signal, options);
 
-    // St-Onge loss
-    // float loss = arma::mean(arma::square(edr_vec - target_vec));
-    // return std::sqrt(loss);
-}
+//     if (edr_result.num_bins != target_edr.num_bins || edr_result.num_frames != target_edr.num_frames)
+//     {
+//         throw std::runtime_error("WeightedEDRLoss: EDR result size does not match target size.");
+//     }
 
-float WeightedEDRLoss(std::span<const float> signal, const audio_utils::analysis::EnergyDecayReliefResult& target_edr,
-                      const audio_utils::analysis::EnergyDecayReliefOptions& options)
-{
-    audio_utils::analysis::EnergyDecayReliefResult edr_result =
-        audio_utils::analysis::EnergyDecayRelief(signal, options);
+//     const Eigen::Map<const Eigen::ArrayXXf> edr_mat(edr_result.data.data(), edr_result.num_bins,
+//     edr_result.num_frames); const Eigen::Map<const Eigen::ArrayXXf> target_mat(target_edr.data.data(),
+//     target_edr.num_bins,
+//                                                        target_edr.num_frames);
 
-    if (edr_result.num_bins != target_edr.num_bins || edr_result.num_frames != target_edr.num_frames)
-    {
-        throw std::runtime_error("WeightedEDRLoss: EDR result size does not match target size.");
-    }
+//     float error = 0.0f;
+//     for (auto bin = 0; bin < edr_result.num_bins; ++bin)
+//     {
+//         float start_db = target_mat(bin, 0);
+//         const float end_db = start_db - 25.f; // Only weight the first 10 dB of decay
 
-    const arma::fmat edr_mat(edr_result.data.data(), edr_result.num_bins, edr_result.num_frames);
-    const arma::fmat target_mat(const_cast<float*>(target_edr.data.data()), target_edr.num_bins, target_edr.num_frames);
+//         size_t end_idx = edr_result.num_frames - 1;
 
-    float error = 0.0f;
-    for (auto bin = 0; bin < edr_result.num_bins; ++bin)
-    {
-        float start_db = target_mat(bin, 0);
-        const float end_db = start_db - 25.f; // Only weight the first 10 dB of decay
+//         auto end_db_idx = (target_mat.row(bin) <= end_db).template cast<int>();
+//         if (!end_db_idx.any())
+//         {
+//             end_idx = edr_result.num_frames - 1;
+//         }
 
-        size_t end_idx = edr_result.num_frames - 1;
-        arma::uvec end_db_idx = arma::find(target_mat.row(bin) <= end_db, 1, "first");
-        if (!end_db_idx.empty())
-        {
-            end_idx = end_db_idx(0);
-        }
+//         error +=
+//             L1Loss(edr_mat.row(bin).head(end_idx), target_mat.row(bin).head(end_idx), ReductionType::NormalizedMean);
+//     }
 
-        // auto diff = arma::sum(arma::abs(edr_mat.row(bin).subvec(0, end_idx) - target_mat.row(bin).subvec(0,
-        // end_idx))); auto sum = arma::sum(arma::abs(target_mat.row(bin).subvec(0, end_idx))); error += diff / sum;
-        error += L1Loss(edr_mat.row(bin).subvec(0, end_idx), target_mat.row(bin).subvec(0, end_idx));
-    }
-
-    return error;
-}
+//     return error;
+// }
 
 } // namespace fdn_optimization
