@@ -88,6 +88,8 @@ float L2Loss(const Eigen::ArrayBase<Derived>& signal, const Eigen::ArrayBase<Der
         return diff.sum();
     case ReductionType::NormalizedMean:
         return diff.sum() / target.square().sum();
+    default:
+        return diff.sum();
     }
 }
 
@@ -104,6 +106,8 @@ float L1Loss(const Eigen::ArrayBase<Derived>& signal, const Eigen::ArrayBase<Der
         return loss.sum();
     case ReductionType::NormalizedMean:
         return loss.sum() / target.cwiseAbs().sum();
+    default:
+        return loss.sum();
     }
 }
 
