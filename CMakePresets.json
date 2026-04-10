@@ -11,19 +11,17 @@
             "hidden": true,
             "displayName": "Common-Ninja",
             "generator": "Ninja Multi-Config",
-            "binaryDir": "${sourceDir}/build/ninja",
-            "cacheVariables": {
-                "CPM_audio_utils_SOURCE:": "${sourceDir}/../audio_utils",
-                "CPM_sfFDN_SOURCE:": "${sourceDir}/../sfFDN",
-                "CPM_ensmallen_SOURCE:": "${sourceDir}/../ensmallen"
-            }
+            "binaryDir": "${sourceDir}/build/ninja"
         },
         {
             "name": "llvm-ninja",
             "displayName": "LLVM - Ninja",
             "description": "Build for LLVM",
             "inherits": "common-ninja",
-            "toolchainFile": "${sourceDir}/cmake/llvm-toolchain.cmake"
+            "toolchainFile": "${sourceDir}/cmake/llvm-toolchain.cmake",
+            "cacheVariables": {
+                "CPM_sfFDN_SOURCE": "/home/alex/src/sfFDN"
+            }
         },
         {
             "name": "windows",
@@ -33,10 +31,7 @@
             "binaryDir": "${sourceDir}/build/windows",
             "toolchainFile": "${sourceDir}/cmake/msvc-toolchain.cmake",
             "cacheVariables": {
-                "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
-                "CPM_audio_utils_SOURCE:": "${sourceDir}/../audio_utils",
-                "CPM_sfFDN_SOURCE:": "${sourceDir}/../sfFDN",
-                "CPM_ensmallen_SOURCE:": "${sourceDir}/../ensmallen"
+                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
             }
         }
     ],

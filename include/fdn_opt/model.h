@@ -93,8 +93,6 @@ class FDNModel
         // No-op
     }
 
-    // std::vector<double> last_losses_;
-
   private:
     sfFDN::FDNConfig initial_config_;
     uint32_t ir_size_;

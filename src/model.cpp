@@ -572,16 +572,6 @@ arma::mat FDNModel::GetInitialParams() const
 
 std::vector<float> FDNModel::GenerateIR(const arma::mat& params)
 {
-    // if (response_buffer_.size() < ir_size_)
-    // {
-    //     response_buffer_.resize(ir_size_);
-    // }
-
-    // if (impulse_buffer_.size() < ir_size_)
-    // {
-    //     impulse_buffer_.resize(ir_size_);
-    // }
-
     std::vector<float> impulse_buffer = BorrowVector(ir_size_);
 
     std::vector<float> response_buffer = BorrowVector(ir_size_);
