@@ -4,6 +4,7 @@
 
 #include <audio_utils/audio_file_manager.h>
 
+#include <nlohmann/json.hpp>
 #include <quill/LogMacros.h>
 #include <quill/Logger.h>
 
@@ -14,7 +15,7 @@
 
 constexpr uint32_t kSampleRate = 48000;
 
-inline void WriteConfigToFile(const sfFDN::FDNConfig& config, const std::filesystem::path& filename,
+inline void WriteConfigToFile(const sfFDN::FDNConfig2& config, const std::filesystem::path& filename,
                               quill::Logger* logger)
 {
     std::ofstream file(filename, std::ios::out);
@@ -24,48 +25,8 @@ inline void WriteConfigToFile(const sfFDN::FDNConfig& config, const std::filesys
         return;
     }
 
-    // Format is
-    // Row 1: input_gains
-    // Row 2: output_gains
-    // Row 3: delays
-    // Row 4: t60s
-    // Row 5: tone correction gains
-    // Next N rows: feedback matrix
-    for (const auto& gain : config.input_gains)
-    {
-        file << gain << " ";
-    }
-    file << std::endl;
-
-    for (const auto& gain : config.output_gains)
-    {
-        file << gain << " ";
-    }
-    file << std::endl;
-
-    for (const auto& delay : config.delays)
-    {
-        file << delay << " ";
-    }
-    file << std::endl;
-
-    if (std::holds_alternative<std::vector<float>>(config.matrix_info))
-    {
-        const auto& matrix_coeffs = std::get<std::vector<float>>(config.matrix_info);
-        const uint32_t N = config.N;
-        for (uint32_t r = 0; r < N; ++r)
-        {
-            for (uint32_t c = 0; c < N; ++c)
-            {
-                file << matrix_coeffs[r * N + c] << " ";
-            }
-            file << std::endl;
-        }
-    }
-    else
-    {
-        LOG_ERROR(logger, "Feedback matrix is not in expected format for writing to file.");
-    }
+    nlohmann::json j = config;
+    file << j.dump(4);
 }
 
 inline void WriteInfoToFile(const fdn_optimization::OptimizationResult& result,
@@ -190,7 +151,7 @@ inline void WriteInfoToFile(const fdn_optimization::OptimizationResult& result,
         optimizer_params);
 }
 
-inline void WriteFilterConfigToFile(const sfFDN::FDNConfig& config, const std::filesystem::path& filename,
+inline void WriteFilterConfigToFile(const sfFDN::FDNConfig2& config, const std::filesystem::path& filename,
                                     quill::Logger* logger)
 {
     std::ofstream file(filename, std::ios::out);
@@ -200,79 +161,18 @@ inline void WriteFilterConfigToFile(const sfFDN::FDNConfig& config, const std::f
         return;
     }
 
-    // Format is
-    // Row 1: t60s
-    // Row 2: tone correction frequencies
-    // Row 3: tone correction gains
-
-    std::visit(
-        [&](const auto& attenuation_config) {
-            using T = std::decay_t<decltype(attenuation_config)>;
-            if constexpr (std::is_same_v<T, sfFDN::TenBandFilterConfig>)
-            {
-                for (const auto& t60 : attenuation_config.t60s)
-                {
-                    file << t60 << " ";
-                }
-                file << std::endl;
-            }
-            else if constexpr (std::is_same_v<T, sfFDN::ThreeBandFilterConfig>)
-            {
-                if (attenuation_config.t60s_per_channel.has_value())
-                {
-                    auto idx = 0;
-                    for (const auto& t60 : attenuation_config.t60s_per_channel.value())
-                    {
-                        file << t60 << " ";
-                        if (++idx % 3 == 0)
-                        {
-                            file << "; ";
-                        }
-                    }
-                    file << std::endl;
-                }
-                else
-                {
-                    for (const auto& t60 : attenuation_config.t60s)
-                    {
-                        file << t60 << " ";
-                    }
-                }
-                for (const auto& freq : attenuation_config.freqs)
-                {
-                    file << freq << " ";
-                }
-
-                file << std::endl;
-            }
-            else
-            {
-                LOG_ERROR(logger, "Unknown attenuation filter config type when writing filter config to file.");
-            }
-        },
-        config.attenuation_filter_config);
-
-    for (const auto& freq : config.tc_frequencies)
-    {
-        file << freq << " ";
-    }
-    file << std::endl;
-
-    for (const auto& gain : config.tc_gains)
-    {
-        file << gain << " ";
-    }
-    file << std::endl;
+    nlohmann::json j = config;
+    file << j.dump(4); // Pretty print with 4 spaces indentation
 }
 
-inline void SaveImpulseResponse(const sfFDN::FDNConfig& config, uint32_t ir_length,
+inline void SaveImpulseResponse(const sfFDN::FDNConfig2& config, uint32_t ir_length,
                                 const std::filesystem::path& filename, quill::Logger* logger,
                                 const std::vector<float>& early_fir = {})
 {
     auto config_copy = config;
     // config_copy.attenuation_t60s = {1.f};
 
-    auto fdn = sfFDN::CreateFDNFromConfig(config_copy, kSampleRate);
+    auto fdn = sfFDN::CreateFDNFromConfig2(config_copy);
     fdn->SetDirectGain(0.0f);
 
     std::vector<float> input_data(ir_length, 0.0f);

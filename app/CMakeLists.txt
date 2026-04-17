@@ -9,6 +9,7 @@ target_link_libraries(
           audio_utils::audio_utils
           Armadillo::Armadillo
           CLI11::CLI11
+          nlohmann_json::nlohmann_json
           FdnOpt::FdnOpt_options
           FdnOpt::FdnOpt_warnings)
 

@@ -27,7 +27,7 @@ gradient_delta = 0.0001
 step_size = 0.442
 beta1 = 0.9
 beta2 = 0.851
-tolerance = 1e-5
+tolerance = 1e-4
 gradient_delta = 1e-2
 
 [SPSA]

@@ -189,7 +189,7 @@ using OptimizationAlgoParams =
 struct OptimizationInfo
 {
     std::vector<OptimizationParamType> parameters_to_optimize;
-    sfFDN::FDNConfig initial_fdn_config;
+    sfFDN::FDNConfig2 initial_fdn_config;
     uint32_t ir_size;
     fdn_optimization::GradientMethod gradient_method = fdn_optimization::GradientMethod::CentralDifferences;
 
@@ -223,8 +223,8 @@ struct OptimizationProgressInfo
 
 struct OptimizationResult
 {
-    sfFDN::FDNConfig initial_fdn_config;
-    sfFDN::FDNConfig optimized_fdn_config;
+    sfFDN::FDNConfig2 initial_fdn_config;
+    sfFDN::FDNConfig2 optimized_fdn_config;
     std::chrono::duration<double> total_time;
     uint32_t total_evaluations;
     std::vector<std::vector<double>> loss_history;
@@ -260,7 +260,7 @@ class FDNOptimizer
     std::jthread thread_;
     std::mutex mutex_;
 
-    sfFDN::FDNConfig optimized_config_;
+    sfFDN::FDNConfig2 optimized_config_;
     OptimizationResult optimization_result_;
 
     std::unique_ptr<OptimCallback> optim_callback_;

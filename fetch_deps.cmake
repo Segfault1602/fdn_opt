@@ -15,6 +15,7 @@ FetchContent_MakeAvailable(CPM)
 include(${cpm_SOURCE_DIR}/cmake/CPM.cmake)
 
 cpmaddpackage("gh:odygrd/quill@11.0.2")
+cpmaddpackage("gh:nlohmann/json@3.12.0")
 
 cpmaddpackage(
   NAME
@@ -35,7 +36,6 @@ if(armadillo_ADDED)
   target_link_libraries(armadillo INTERFACE BLAS::BLAS LAPACK::LAPACK)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(armadillo INTERFACE OpenMP::OpenMP_CXX)
-    target_compile_definitions(armadillo INTERFACE ARMA_USE_OPENMP)
   endif()
 else()
   message(FATAL_ERROR "Armadillo package not added correctly")
@@ -55,9 +55,6 @@ cpmaddpackage(
 if(ensmallen_ADDED)
   add_library(ensmallen INTERFACE IMPORTED)
   target_include_directories(ensmallen INTERFACE ${ensmallen_SOURCE_DIR}/include)
-  set(ENSMALLEN_INCLUDE_DIR
-      ${ensmallen_SOURCE_DIR}/include
-      CACHE PATH "Ensmallen include directory")
 else()
   message(FATAL_ERROR "Ensmallen package not added correctly")
 endif()

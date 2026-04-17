@@ -46,38 +46,56 @@ const std::vector<float> kOptimizedMatrix = {
     -0.0730987, 0.144298,   0.160557,   -0.517478, 0.376585,   -0.555424,  -0.249098,  -0.02145,   -0.68595,  0.027881,
     -0.391745,  0.447998,   -0.0711281, -0.327048};
 
-sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = false, bool random_delays = false)
+sfFDN::FDNConfig2 CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = false, bool random_delays = false)
 {
-    sfFDN::FDNConfig initial_fdn_config{};
-    initial_fdn_config.N = fdn_order;
+    sfFDN::FDNConfig2 initial_fdn_config{};
+    initial_fdn_config.fdn_size = fdn_order;
     initial_fdn_config.transposed = false;
-    initial_fdn_config.input_gains = std::vector<float>(fdn_order, 0.5f);
-    initial_fdn_config.output_gains = std::vector<float>(fdn_order, 0.5f);
-    initial_fdn_config.attenuation_filter_config = sfFDN::ProportionalAttenuationConfig{10.f};
-    initial_fdn_config.tc_frequencies = {31.25, 62.5, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
+    initial_fdn_config.direct_gain = 0.0f;
+    initial_fdn_config.sample_rate = kSampleRate;
+    initial_fdn_config.block_size = 128;
+    initial_fdn_config.input_block_config.parallel_gains_config = {sfFDN::ParallelGainsMode::Split,
+                                                                   std::vector<float>(fdn_order, 0.5f)};
+    initial_fdn_config.output_block_config.parallel_gains_config = {sfFDN::ParallelGainsMode::Merge,
+                                                                    std::vector<float>(fdn_order, 0.5f)};
 
     if (fdn_order == 4)
     {
-        initial_fdn_config.delays = {1499, 1889, 2381, 2999};
+        initial_fdn_config.delay_bank_config.delays = {1499, 1889, 2381, 2999};
     }
     else if (fdn_order == 6)
     {
-        initial_fdn_config.delays = {997, 1153, 1327, 1559, 1801, 2099};
+        initial_fdn_config.delay_bank_config.delays = {997, 1153, 1327, 1559, 1801, 2099};
     }
     else if (fdn_order == 8)
     {
-        initial_fdn_config.delays = {809, 877, 937, 1049, 1151, 1249, 1373, 1499};
+        initial_fdn_config.delay_bank_config.delays = {809, 877, 937, 1049, 1151, 1249, 1373, 1499};
     }
     else
     {
-        initial_fdn_config.delays = sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Uniform, 42);
+        initial_fdn_config.delay_bank_config.delays =
+            sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Uniform, 42);
     }
 
     if (random_delays)
     {
         std::cout << "Using random delays..." << std::endl;
-        initial_fdn_config.delays = sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Uniform);
+        initial_fdn_config.delay_bank_config.delays =
+            sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Uniform);
     }
+
+    initial_fdn_config.delay_bank_config.block_size = 128;
+    initial_fdn_config.delay_bank_config.interpolation_type = sfFDN::DelayInterpolationType::None;
+
+    // initial_fdn_config.loop_filter_configs = sfFDN::ProportionalAttenuationConfig{10.f};
+    sfFDN::AttenuationFilterBankOptions loop_filters;
+    for (uint32_t i = 0; i < fdn_order; ++i)
+    {
+        sfFDN::ProportionalAttenuationOptions c{
+            .t60 = 1.f, .delay = initial_fdn_config.delay_bank_config.delays[i], .sample_rate = kSampleRate};
+        loop_filters.filter_configs.push_back(c);
+    }
+    initial_fdn_config.loop_filter_configs = {loop_filters};
 
     if (randomize)
     {
@@ -91,21 +109,24 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
 
         for (uint32_t i = 0; i < fdn_order; ++i)
         {
-            initial_fdn_config.input_gains[i] = input_gains(i);
-            initial_fdn_config.output_gains[i] = output_gains(i);
+            initial_fdn_config.input_block_config.parallel_gains_config.gains[i] = input_gains(i);
+            initial_fdn_config.output_block_config.parallel_gains_config.gains[i] = output_gains(i);
         }
 
-        initial_fdn_config.matrix_info = sfFDN::GenerateMatrix(fdn_order, sfFDN::ScalarMatrixType::Random);
+        initial_fdn_config.feedback_matrix_config =
+            sfFDN::ScalarFeedbackMatrixOptions{.matrix_size = fdn_order, .type = sfFDN::ScalarMatrixType::Random};
     }
     else
     {
         if (fdn_order == 8 || fdn_order == 4)
         {
-            initial_fdn_config.matrix_info = sfFDN::GenerateMatrix(fdn_order, sfFDN::ScalarMatrixType::Hadamard);
+            initial_fdn_config.feedback_matrix_config =
+                sfFDN::ScalarFeedbackMatrixOptions{.matrix_size = fdn_order, .type = sfFDN::ScalarMatrixType::Hadamard};
         }
         else
         {
-            initial_fdn_config.matrix_info = sfFDN::GenerateMatrix(fdn_order, sfFDN::ScalarMatrixType::Householder, 42);
+            initial_fdn_config.feedback_matrix_config = sfFDN::ScalarFeedbackMatrixOptions{
+                .matrix_size = fdn_order, .type = sfFDN::ScalarMatrixType::Householder};
         }
     }
     return initial_fdn_config;
@@ -141,7 +162,7 @@ fdn_optimization::OptimizationResult DoOptimization(quill::Logger* logger, fdn_o
 }
 
 fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
-                                                       const sfFDN::FDNConfig& initial_fdn_config,
+                                                       const sfFDN::FDNConfig2& initial_fdn_config,
                                                        const fdn_optimization::OptimizationAlgoParams& optimizer_params,
                                                        const std::tuple<double, double, double>& loss_weights,
                                                        bool verbose)
@@ -188,12 +209,10 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
     return result;
 }
 
-fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, const sfFDN::FDNConfig& initial_fdn_config,
-                                                      const fdn_optimization::OptimizationAlgoParams&,
-                                                      const std::vector<float>& target_rir,
-                                                      const std::vector<float>& early_fir,
-                                                      const std::tuple<double, double, double>& loss_weights,
-                                                      bool verbose)
+fdn_optimization::OptimizationResult OptimizeSpectrum(
+    quill::Logger* logger, const sfFDN::FDNConfig2& initial_fdn_config, const fdn_optimization::OptimizationAlgoParams&,
+    const std::vector<float>& target_rir, const std::vector<float>& early_fir,
+    const std::tuple<double, double, double>& loss_weights, bool verbose)
 {
     fdn_optimization::AdamParameters opt_params{.step_size = 0.1,
                                                 .learning_rate_decay = 1.0,
@@ -245,11 +264,12 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
     return result;
 }
 
-void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_filename,
+void RenderAudio(const sfFDN::FDNConfig2& fdn_config, const std::string& input_filename,
                  const std::filesystem::path& output_dir, quill::Logger* logger);
 
 int main(int argc, char** argv)
 {
+    omp_set_num_threads(1);
     quill::Backend::start();
     quill::Logger* logger = quill::Frontend::create_or_get_logger(
         "root", quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
@@ -479,7 +499,7 @@ int main(int argc, char** argv)
 
     if (save_output)
     {
-        initial_fdn_config.attenuation_filter_config = sfFDN::ProportionalAttenuationConfig{2.f};
+        // initial_fdn_config.attenuation_filter_config = sfFDN::ProportionalAttenuationConfig{2.f};
         SaveImpulseResponse(initial_fdn_config, kSampleRate * 2.f, optim_subdir / "initial_ir.wav", logger);
         WriteConfigToFile(initial_fdn_config, optim_subdir / "initial_fdn_config.txt", logger);
     }
@@ -500,7 +520,7 @@ int main(int argc, char** argv)
         WriteConfigToFile(result.optimized_fdn_config, optim_subdir / "colorless_fdn_config.txt", logger);
         WriteInfoToFile(result, optimizer_params, optim_subdir / "colorless_fdn_info.txt", logger);
 
-        result.optimized_fdn_config.attenuation_filter_config = sfFDN::ProportionalAttenuationConfig{2.f};
+        // result.optimized_fdn_config.attenuation_filter_config = sfFDN::ProportionalAttenuationConfig{2.f};
         SaveImpulseResponse(result.optimized_fdn_config, kSampleRate * 3.f, optim_subdir / "colorless_ir.wav", logger);
         WriteLossHistoryToFile(result.loss_history, result.loss_names, optim_subdir / "colorless_loss_history.txt",
                                logger);
@@ -588,7 +608,7 @@ int main(int argc, char** argv)
     return 0;
 }
 
-void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_filename,
+void RenderAudio(const sfFDN::FDNConfig2& fdn_config, const std::string& input_filename,
                  const std::filesystem::path& output_dir, quill::Logger* logger)
 {
     std::vector<float> audio_file;
@@ -607,7 +627,7 @@ void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_fi
         return;
     }
 
-    auto fdn = sfFDN::CreateFDNFromConfig(fdn_config, kSampleRate);
+    auto fdn = sfFDN::CreateFDNFromConfig2(fdn_config);
     fdn->SetDirectGain(0.0f);
 
     std::vector<float> output_audio(audio_file.size(), 0.0f);

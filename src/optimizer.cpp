@@ -314,6 +314,7 @@ struct OptimizationVisitor
 
         ens::LBestPSO optimizer(p.num_particles, -1.0, 1.0, p.max_iterations, p.horizon_size, p.tolerance,
                                 p.exploitation_factor, p.exploration_factor);
+        optimizer.NumThreads() = 0; // Use all available threads
 
         DoOptimize(optimizer);
     }
@@ -603,7 +604,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     auto initial_loss = model.Evaluate(params);
     LOG_INFO(logger_, "Initial loss: {}", initial_loss);
 
-    sfFDN::FDNConfig initial_config = model.GetFDNConfig(params);
+    sfFDN::FDNConfig2 initial_config = model.GetFDNConfig(params);
 
     optim_callback_ = std::make_unique<OptimCallback>(stop_token);
 

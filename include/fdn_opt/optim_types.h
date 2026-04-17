@@ -10,7 +10,6 @@ enum class OptimizationParamType : uint8_t
     Matrix,
     Matrix_Householder,
     Matrix_Circulant,
-    Delays,
     AttenuationFilters,
     AttenuationFilters_3Band,
     TonecorrectionFilters,
