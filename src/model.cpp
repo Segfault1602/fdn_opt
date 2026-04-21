@@ -56,7 +56,7 @@ arma::mat ParamToGain(const arma::mat& params)
     return gains;
 }
 
-arma::mat ParamToGains(sfFDN::FDNConfig2& config, const arma::mat& params)
+arma::mat ParamToGains(sfFDN::FDNConfig& config, const arma::mat& params)
 {
     const uint32_t fdn_order = config.fdn_size;
     assert(params.n_cols >= 2 * fdn_order);
@@ -86,7 +86,7 @@ arma::mat ParamToGains(sfFDN::FDNConfig2& config, const arma::mat& params)
     return leftover_params;
 }
 
-arma::mat ParamToMatrix(sfFDN::FDNConfig2& config, const arma::mat& params)
+arma::mat ParamToMatrix(sfFDN::FDNConfig& config, const arma::mat& params)
 {
     const uint32_t fdn_order = config.fdn_size;
     assert(params.n_cols >= fdn_order * fdn_order);
@@ -123,7 +123,7 @@ arma::mat ParamToMatrix(sfFDN::FDNConfig2& config, const arma::mat& params)
     return leftover_params;
 }
 
-arma::mat ParamToHouseholderMatrix(sfFDN::FDNConfig2& config, const arma::mat& params)
+arma::mat ParamToHouseholderMatrix(sfFDN::FDNConfig& config, const arma::mat& params)
 {
     const uint32_t fdn_order = config.fdn_size;
     assert(params.n_cols >= fdn_order);
@@ -156,7 +156,7 @@ arma::mat ParamToHouseholderMatrix(sfFDN::FDNConfig2& config, const arma::mat& p
     return leftover_params;
 }
 
-arma::mat ParamToCirculantMatrix(sfFDN::FDNConfig2& config, const arma::mat& params)
+arma::mat ParamToCirculantMatrix(sfFDN::FDNConfig& config, const arma::mat& params)
 {
     const uint32_t fdn_order = config.fdn_size;
     assert(params.n_cols >= fdn_order);
@@ -190,7 +190,7 @@ arma::mat ParamToCirculantMatrix(sfFDN::FDNConfig2& config, const arma::mat& par
     return leftover_params;
 }
 
-arma::mat ParamsToAttenuationFilters_10Bands(sfFDN::FDNConfig2& config, const arma::mat& params)
+arma::mat ParamsToAttenuationFilters_10Bands(sfFDN::FDNConfig& config, const arma::mat& params)
 {
     assert(params.n_cols >= kNBands);
 
@@ -240,7 +240,7 @@ arma::mat ParamsToAttenuationFilters_10Bands(sfFDN::FDNConfig2& config, const ar
     return leftover_params;
 }
 
-arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig2& config, const arma::mat& params)
+arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig& config, const arma::mat& params)
 {
     const size_t kParamCount = 3 * config.fdn_size; // 3 for the bands, per channel
     assert(params.n_cols >= kParamCount);
@@ -292,7 +292,7 @@ arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig2& config, const arma
     return leftover_params;
 }
 
-arma::mat ParamsToTonecorrectionFilters(sfFDN::FDNConfig2& config, const arma::mat& params)
+arma::mat ParamsToTonecorrectionFilters(sfFDN::FDNConfig& config, const arma::mat& params)
 {
     assert(params.n_cols >= kNBands);
 
@@ -333,7 +333,7 @@ arma::mat ParamsToTonecorrectionFilters(sfFDN::FDNConfig2& config, const arma::m
     return leftover_params;
 }
 
-arma::mat ParamsToOverallGain(sfFDN::FDNConfig2& config, const arma::mat& params)
+arma::mat ParamsToOverallGain(sfFDN::FDNConfig& config, const arma::mat& params)
 {
     assert(params.n_cols >= 1);
 
@@ -354,7 +354,7 @@ arma::mat ParamsToOverallGain(sfFDN::FDNConfig2& config, const arma::mat& params
     return leftover_params;
 }
 
-arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig2& config,
+arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig& config,
                                      std::span<const fdn_optimization::OptimizationParamType> param_types)
 {
     arma::mat params(0, 0);
@@ -452,7 +452,7 @@ arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig2& config,
 
 namespace fdn_optimization
 {
-FDNModel::FDNModel(sfFDN::FDNConfig2 initial_config, uint32_t ir_size,
+FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
                    std::span<const OptimizationParamType> param_types, GradientMethod gradient_method)
     : initial_config_(initial_config)
     , ir_size_(ir_size)
@@ -482,7 +482,7 @@ FDNModel::FDNModel(sfFDN::FDNConfig2 initial_config, uint32_t ir_size,
         sfFDN::AttenuationFilterBankOptions attenuation_filter_bank_config;
         for (uint32_t i = 0; i < fdn_order; ++i)
         {
-            sfFDN::ProportionalAttenuationOptions filter_config;
+            sfFDN::HomogenousFilterOptions filter_config;
             filter_config.t60 = 1.f;
             filter_config.delay = initial_config_.delay_bank_config.delays[i];
             filter_config.sample_rate = initial_config_.sample_rate;
@@ -586,7 +586,7 @@ std::vector<float> FDNModel::GenerateIR(const arma::mat& params)
 
     sfFDN::AudioBuffer in_buffer(ir_size_, 1, impulse_buffer);
     sfFDN::AudioBuffer out_buffer(ir_size_, 1, response_buffer);
-    auto fdn = sfFDN::CreateFDNFromConfig2(GetFDNConfig(params));
+    auto fdn = sfFDN::CreateFDNFromConfig(GetFDNConfig(params));
     fdn->Process(in_buffer, out_buffer);
 
     ReturnVectorToPool(std::move(impulse_buffer));
@@ -656,10 +656,10 @@ double FDNModel::EvaluateWithGradient(const arma::mat& x, const size_t i, arma::
     return EvaluateWithGradient(x, g);
 }
 
-sfFDN::FDNConfig2 FDNModel::GetFDNConfig(const arma::mat& params) const
+sfFDN::FDNConfig FDNModel::GetFDNConfig(const arma::mat& params) const
 {
     arma::mat params_to_process = params;
-    sfFDN::FDNConfig2 config = initial_config_;
+    sfFDN::FDNConfig config = initial_config_;
 
     for (const auto& type : param_types_)
     {
@@ -715,7 +715,7 @@ sfFDN::FDNConfig2 FDNModel::GetFDNConfig(const arma::mat& params) const
 
 std::string FDNModel::PrintFDNConfig(const arma::mat& params) const
 {
-    sfFDN::FDNConfig2 config = GetFDNConfig(params);
+    sfFDN::FDNConfig config = GetFDNConfig(params);
 
     arma::fvec input_gains_arma(config.input_block_config.parallel_gains_config.gains.data(), config.fdn_size);
     arma::fvec output_gains_arma(config.output_block_config.parallel_gains_config.gains.data(), config.fdn_size);

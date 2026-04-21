@@ -45,7 +45,7 @@ class LossRegistry
 class FDNModel
 {
   public:
-    FDNModel(sfFDN::FDNConfig2 initial_config, uint32_t ir_size, std::span<const OptimizationParamType> param_types,
+    FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size, std::span<const OptimizationParamType> param_types,
              GradientMethod gradient_method = GradientMethod::CentralDifferences);
 
     void SetLossFunctions(const std::vector<std::shared_ptr<AudioLoss>>& loss_functions);
@@ -79,7 +79,7 @@ class FDNModel
     double EvaluateWithGradient(const arma::mat& x, arma::mat& g);
     double EvaluateWithGradient(const arma::mat& x, const size_t i, arma::mat& g, const size_t batchSize);
 
-    sfFDN::FDNConfig2 GetFDNConfig(const arma::mat& params) const;
+    sfFDN::FDNConfig GetFDNConfig(const arma::mat& params) const;
 
     std::string PrintFDNConfig(const arma::mat& params) const;
 
@@ -94,7 +94,7 @@ class FDNModel
     }
 
   private:
-    sfFDN::FDNConfig2 initial_config_;
+    sfFDN::FDNConfig initial_config_;
     uint32_t ir_size_;
     std::vector<float> impulse_buffer_;
     std::vector<float> response_buffer_;

@@ -604,7 +604,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     auto initial_loss = model.Evaluate(params);
     LOG_INFO(logger_, "Initial loss: {}", initial_loss);
 
-    sfFDN::FDNConfig2 initial_config = model.GetFDNConfig(params);
+    sfFDN::FDNConfig initial_config = model.GetFDNConfig(params);
 
     optim_callback_ = std::make_unique<OptimCallback>(stop_token);
 

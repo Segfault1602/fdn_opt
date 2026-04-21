@@ -46,9 +46,9 @@ const std::vector<float> kOptimizedMatrix = {
     -0.0730987, 0.144298,   0.160557,   -0.517478, 0.376585,   -0.555424,  -0.249098,  -0.02145,   -0.68595,  0.027881,
     -0.391745,  0.447998,   -0.0711281, -0.327048};
 
-sfFDN::FDNConfig2 CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = false, bool random_delays = false)
+sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = false, bool random_delays = false)
 {
-    sfFDN::FDNConfig2 initial_fdn_config{};
+    sfFDN::FDNConfig initial_fdn_config{};
     initial_fdn_config.fdn_size = fdn_order;
     initial_fdn_config.transposed = false;
     initial_fdn_config.direct_gain = 0.0f;
@@ -91,7 +91,7 @@ sfFDN::FDNConfig2 CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fa
     sfFDN::AttenuationFilterBankOptions loop_filters;
     for (uint32_t i = 0; i < fdn_order; ++i)
     {
-        sfFDN::ProportionalAttenuationOptions c{
+        sfFDN::HomogenousFilterOptions c{
             .t60 = 1.f, .delay = initial_fdn_config.delay_bank_config.delays[i], .sample_rate = kSampleRate};
         loop_filters.filter_configs.push_back(c);
     }
@@ -162,7 +162,7 @@ fdn_optimization::OptimizationResult DoOptimization(quill::Logger* logger, fdn_o
 }
 
 fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
-                                                       const sfFDN::FDNConfig2& initial_fdn_config,
+                                                       const sfFDN::FDNConfig& initial_fdn_config,
                                                        const fdn_optimization::OptimizationAlgoParams& optimizer_params,
                                                        const std::tuple<double, double, double>& loss_weights,
                                                        bool verbose)
@@ -209,10 +209,12 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
     return result;
 }
 
-fdn_optimization::OptimizationResult OptimizeSpectrum(
-    quill::Logger* logger, const sfFDN::FDNConfig2& initial_fdn_config, const fdn_optimization::OptimizationAlgoParams&,
-    const std::vector<float>& target_rir, const std::vector<float>& early_fir,
-    const std::tuple<double, double, double>& loss_weights, bool verbose)
+fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, const sfFDN::FDNConfig& initial_fdn_config,
+                                                      const fdn_optimization::OptimizationAlgoParams&,
+                                                      const std::vector<float>& target_rir,
+                                                      const std::vector<float>& early_fir,
+                                                      const std::tuple<double, double, double>& loss_weights,
+                                                      bool verbose)
 {
     fdn_optimization::AdamParameters opt_params{.step_size = 0.1,
                                                 .learning_rate_decay = 1.0,
@@ -264,7 +266,7 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(
     return result;
 }
 
-void RenderAudio(const sfFDN::FDNConfig2& fdn_config, const std::string& input_filename,
+void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_filename,
                  const std::filesystem::path& output_dir, quill::Logger* logger);
 
 int main(int argc, char** argv)
@@ -608,7 +610,7 @@ int main(int argc, char** argv)
     return 0;
 }
 
-void RenderAudio(const sfFDN::FDNConfig2& fdn_config, const std::string& input_filename,
+void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_filename,
                  const std::filesystem::path& output_dir, quill::Logger* logger)
 {
     std::vector<float> audio_file;
@@ -627,7 +629,7 @@ void RenderAudio(const sfFDN::FDNConfig2& fdn_config, const std::string& input_f
         return;
     }
 
-    auto fdn = sfFDN::CreateFDNFromConfig2(fdn_config);
+    auto fdn = sfFDN::CreateFDNFromConfig(fdn_config);
     fdn->SetDirectGain(0.0f);
 
     std::vector<float> output_audio(audio_file.size(), 0.0f);

@@ -15,7 +15,7 @@
 
 constexpr uint32_t kSampleRate = 48000;
 
-inline void WriteConfigToFile(const sfFDN::FDNConfig2& config, const std::filesystem::path& filename,
+inline void WriteConfigToFile(const sfFDN::FDNConfig& config, const std::filesystem::path& filename,
                               quill::Logger* logger)
 {
     std::ofstream file(filename, std::ios::out);
@@ -151,7 +151,7 @@ inline void WriteInfoToFile(const fdn_optimization::OptimizationResult& result,
         optimizer_params);
 }
 
-inline void WriteFilterConfigToFile(const sfFDN::FDNConfig2& config, const std::filesystem::path& filename,
+inline void WriteFilterConfigToFile(const sfFDN::FDNConfig& config, const std::filesystem::path& filename,
                                     quill::Logger* logger)
 {
     std::ofstream file(filename, std::ios::out);
@@ -165,14 +165,14 @@ inline void WriteFilterConfigToFile(const sfFDN::FDNConfig2& config, const std::
     file << j.dump(4); // Pretty print with 4 spaces indentation
 }
 
-inline void SaveImpulseResponse(const sfFDN::FDNConfig2& config, uint32_t ir_length,
+inline void SaveImpulseResponse(const sfFDN::FDNConfig& config, uint32_t ir_length,
                                 const std::filesystem::path& filename, quill::Logger* logger,
                                 const std::vector<float>& early_fir = {})
 {
     auto config_copy = config;
     // config_copy.attenuation_t60s = {1.f};
 
-    auto fdn = sfFDN::CreateFDNFromConfig2(config_copy);
+    auto fdn = sfFDN::CreateFDNFromConfig(config_copy);
     fdn->SetDirectGain(0.0f);
 
     std::vector<float> input_data(ir_length, 0.0f);
