@@ -46,9 +46,9 @@ cpmaddpackage(
   NAME
   ensmallen
   GIT_REPOSITORY
-  https://github.com/mlpack/ensmallen.git
+  https://github.com/Segfault1602/ensmallen.git
   GIT_TAG
-  master
+  parallel_pso
   DOWNLOAD_ONLY
   TRUE)
 
@@ -68,13 +68,13 @@ cpmaddpackage(
   "AUDIO_UTILS_ENABLE_HARDENING ON"
   "AUDIO_UTILS_USE_SANITIZER OFF")
 
-cpmaddpackage(
-  NAME
-  sfFDN
-  GIT_REPOSITORY
-  https://github.com/Segfault1602/sfFDN.git
-  GIT_TAG
-  main)
+cpmaddpackage("gh:Segfault1602/sfFDN@1.0.0")
+#   NAME
+#   sfFDN
+#   GIT_REPOSITORY
+#   https://github.com/Segfault1602/sfFDN.git
+#   GIT_TAG
+#   main)
 
 cpmaddpackage(
   NAME

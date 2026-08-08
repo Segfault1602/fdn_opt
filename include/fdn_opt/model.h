@@ -5,7 +5,6 @@
 #include <sffdn/sffdn.h>
 
 #include "audio_loss.h"
-#include "loss.h"
 #include "optim_types.h"
 
 #include <cstdint>

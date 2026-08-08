@@ -6,7 +6,7 @@ OUT_DIR = "../optim_output";
 
 RESULTS = dir(OUT_DIR);
 
-% Ignore "." and ".."  
+% Ignore "." and ".."
 RESULTS = RESULTS(3:end);
 
 RESULTS = RESULTS([RESULTS.isdir]);
@@ -99,7 +99,7 @@ tile = tiledlayout(3,3, TileSpacing="compact", Padding="compact");
 axes = [];
 for n = 1:9
     axes(n) = nexttile;
-    
+
     if filter_freqs(n) < 1000
         freq_string = sprintf("%.0f Hz", round(filter_freqs(n),2,"significant"));
     else
@@ -237,7 +237,7 @@ figure(8);
 
 net = DecayFitNetToolbox(1, target_fs);
 [tVals_decayfitnet, aVals_decayfitnet, nVals_decayFitNet, normVals_decayFitNet] = net.estimateParameters(target_ir);
-disp('==== DecayFitNet: Estimated T values (in seconds, T=0 indicates an inactive slope): ====') 
+disp('==== DecayFitNet: Estimated T values (in seconds, T=0 indicates an inactive slope): ====')
 disp(tVals_decayfitnet)
 
 [L, A, N] = decayFitNet2InitialLevel(tVals_decayfitnet, aVals_decayfitnet, nVals_decayFitNet, normVals_decayFitNet, target_fs, size(target_ir,1), 10);
@@ -248,7 +248,7 @@ decayFitNet_Freqs = net.getFilterFrequencies();
 semilogx(decayFitNet_Freqs, tVals_decayfitnet, DisplayName="DecayFitNet");
 
 hold on;
-% 
+%
 % if size(fdn_t60s, 2) == 5
 %     fdn_decay_freqs = [fdn_t60s(4) (fdn_t60s(4) + fdn_t60s(5))/2 fdn_t60s(5)];
 %     fdn_t60s = fdn_t60s(1:3);
@@ -264,15 +264,15 @@ ylim([0 1.5*max(tVals_decayfitnet(:))]);
 
 
 function [processed_irs] = RemoveBeginningSilence(signals)
-    processed_irs = zeros(size(signals));
+processed_irs = zeros(size(signals));
 
-    for n = 1:size(signals, 2)
-        % Find the first non-silent sample
-        max_sample = max(abs(signals(:,n)));
-        direct_index = find(signals(:,n) >= max_sample*0.25, 1);
-        % Remove silence from the signal
-        processed_size = size(signals,1) - direct_index+1;
-        processed_irs(1:processed_size,n) = signals(direct_index:end,n);
-    end
+for n = 1:size(signals, 2)
+    % Find the first non-silent sample
+    max_sample = max(abs(signals(:,n)));
+    direct_index = find(signals(:,n) >= max_sample*0.25, 1);
+    % Remove silence from the signal
+    processed_size = size(signals,1) - direct_index+1;
+    processed_irs(1:processed_size,n) = signals(direct_index:end,n);
+end
 
 end

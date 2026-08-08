@@ -18,10 +18,7 @@
             "displayName": "LLVM - Ninja",
             "description": "Build for LLVM",
             "inherits": "common-ninja",
-            "toolchainFile": "${sourceDir}/cmake/llvm-toolchain.cmake",
-            "cacheVariables": {
-                "CPM_sfFDN_SOURCE": "/home/alex/src/sfFDN"
-            }
+            "toolchainFile": "${sourceDir}/cmake/llvm-toolchain.cmake"
         },
         {
             "name": "windows",

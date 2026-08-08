@@ -5,6 +5,7 @@
 #include <quill/LogMacros.h>
 #include <quill/Logger.h>
 
+#include "audio_loss.h"
 #include "optim_types.h"
 
 #include <atomic>
@@ -193,21 +194,6 @@ struct OptimizationInfo
     uint32_t ir_size;
     fdn_optimization::GradientMethod gradient_method = fdn_optimization::GradientMethod::CentralDifferences;
 
-    // Colorless loss weights
-    double spectral_flatness_weight = 1.0;
-    double sparsity_weight = 1.0;
-    double power_envelope_weight = 0.0;
-
-    // RIR match loss weights
-    double edc_weight = 1.0;
-    double mel_edr_weight = 1.0;
-    double weighted_edr_weight = 0.0;
-
-    uint32_t mel_edr_fft_length = 4096;
-    uint32_t mel_edr_hop_size = 128;
-    uint32_t mel_edr_window_size = 1024;
-    uint32_t mel_edr_num_bands = 64;
-
     std::vector<float> target_rir;
     std::vector<float> early_fir;
 
@@ -240,6 +226,14 @@ class FDNOptimizer
     FDNOptimizer(quill::Logger* logger, bool verbose = false);
     ~FDNOptimizer();
 
+    FDNOptimizer(const FDNOptimizer&) = delete;
+    FDNOptimizer& operator=(const FDNOptimizer&) = delete;
+
+    FDNOptimizer(FDNOptimizer&&) = delete;
+    FDNOptimizer& operator=(FDNOptimizer&&) = delete;
+
+    void SetLossFunctions(std::span<std::shared_ptr<AudioLoss>> loss_functions);
+
     void StartOptimization(OptimizationInfo& info);
     void CancelOptimization();
     void ResetStatus();
@@ -264,5 +258,7 @@ class FDNOptimizer
     OptimizationResult optimization_result_;
 
     std::unique_ptr<OptimCallback> optim_callback_;
+
+    std::vector<std::shared_ptr<AudioLoss>> loss_functions_;
 };
 } // namespace fdn_optimization

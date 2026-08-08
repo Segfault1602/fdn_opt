@@ -394,6 +394,12 @@ FDNOptimizer::~FDNOptimizer()
     }
 }
 
+void FDNOptimizer::SetLossFunctions(std::span<std::shared_ptr<AudioLoss>> loss_functions)
+{
+    std::scoped_lock lock(mutex_);
+    loss_functions_ = std::vector<std::shared_ptr<AudioLoss>>(loss_functions.begin(), loss_functions.end());
+}
+
 void FDNOptimizer::StartOptimization(OptimizationInfo& info)
 {
     auto current_status = status_.load();
@@ -530,69 +536,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
              info.gradient_method == GradientMethod::CentralDifferences ? "Central Differences" : "Forward Differences",
              gradient_delta);
 
-    std::vector<std::shared_ptr<AudioLoss>> loss_functions;
-
-    if (optimizing_filters)
-    {
-        if (info.edc_weight > 0.0)
-        {
-            LOG_INFO(logger_, "Adding EDC loss with weight {}", info.edc_weight);
-
-            auto edc_loss = std::make_shared<EnergyDecayCurveLoss>(info.target_rir, info.edc_weight);
-            loss_functions.push_back(edc_loss);
-        }
-
-        if (info.mel_edr_weight > 0.0)
-        {
-            LOG_INFO(logger_, "Adding Mel EDR loss with weight {}", info.mel_edr_weight);
-            audio_utils::analysis::EnergyDecayReliefOptions edr_options;
-            edr_options.fft_length = info.mel_edr_fft_length;
-            edr_options.hop_size = info.mel_edr_hop_size;
-            edr_options.window_size = info.mel_edr_window_size;
-            edr_options.window_type = audio_utils::FFTWindowType::Hann;
-            edr_options.n_mels = info.mel_edr_num_bands;
-            edr_options.to_db = true;
-
-            auto edr_loss = std::make_shared<EnergyDecayReliefLoss>(info.target_rir, edr_options, info.mel_edr_weight);
-            loss_functions.push_back(edr_loss);
-        }
-
-        if (info.weighted_edr_weight > 0.0)
-        {
-            LOG_INFO(logger_, "Adding Weighted EDR loss with weight {}", info.weighted_edr_weight);
-            audio_utils::analysis::EnergyDecayReliefOptions edr_options;
-            edr_options.fft_length = info.mel_edr_fft_length;
-            edr_options.hop_size = info.mel_edr_hop_size;
-            edr_options.window_size = info.mel_edr_window_size;
-            edr_options.window_type = audio_utils::FFTWindowType::Hann;
-            edr_options.n_mels = info.mel_edr_num_bands;
-            edr_options.to_db = true;
-
-            auto weighted_edr_loss =
-                std::make_shared<WeightedEDRLoss>(info.target_rir, edr_options, -20.0f, info.weighted_edr_weight);
-            loss_functions.push_back(weighted_edr_loss);
-        }
-    }
-    else
-    {
-        if (info.spectral_flatness_weight > 0.0)
-        {
-            LOG_INFO(logger_, "Adding spectral flatness loss with weight {}", info.spectral_flatness_weight);
-            constexpr float kTargetSpectralFlatness = 0.5575f;
-            auto spectral_flatness_loss =
-                std::make_shared<SpectralFlatnessLoss>(kTargetSpectralFlatness, info.spectral_flatness_weight);
-            loss_functions.push_back(spectral_flatness_loss);
-        }
-
-        if (info.sparsity_weight > 0.0)
-        {
-            LOG_INFO(logger_, "Adding sparsity loss with weight {}", info.sparsity_weight);
-            auto sparsity_loss = std::make_shared<TimeDomainSparsityLoss>(info.sparsity_weight);
-            loss_functions.push_back(sparsity_loss);
-        }
-    }
-
-    model.SetLossFunctions(loss_functions);
+    model.SetLossFunctions(loss_functions_);
 
     arma::mat params = model.GetInitialParams();
     std::string initial_config_str = model.PrintFDNConfig(params);
@@ -608,7 +552,12 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
 
     optim_callback_ = std::make_unique<OptimCallback>(stop_token);
 
-    OptimizationVisitor visitor{params, model, optim_callback_.get(), info, logger_, verbose_};
+    OptimizationVisitor visitor{.params = params,
+                                .model = model,
+                                .optim_callback = optim_callback_.get(),
+                                .info = info,
+                                .logger = logger_,
+                                .verbose = verbose_};
     std::visit(visitor, info.optimizer_params);
 
     double final_loss = model.Evaluate(params);

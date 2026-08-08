@@ -54,10 +54,10 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
     initial_fdn_config.direct_gain = 0.0f;
     initial_fdn_config.sample_rate = kSampleRate;
     initial_fdn_config.block_size = 128;
-    initial_fdn_config.input_block_config.parallel_gains_config = {sfFDN::ParallelGainsMode::Split,
-                                                                   std::vector<float>(fdn_order, 0.5f)};
-    initial_fdn_config.output_block_config.parallel_gains_config = {sfFDN::ParallelGainsMode::Merge,
-                                                                    std::vector<float>(fdn_order, 0.5f)};
+    initial_fdn_config.input_block_config.parallel_gains_config = {.mode = sfFDN::ParallelGainsMode::Split,
+                                                                   .gains = std::vector<float>(fdn_order, 0.5f)};
+    initial_fdn_config.output_block_config.parallel_gains_config = {.mode = sfFDN::ParallelGainsMode::Merge,
+                                                                    .gains = std::vector<float>(fdn_order, 0.5f)};
 
     if (fdn_order == 4)
     {
@@ -171,19 +171,38 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::Gains,
                                       fdn_optimization::OptimizationParamType::Matrix};
 
+    std::vector<std::shared_ptr<fdn_optimization::AudioLoss>> loss_functions;
+
+    // Spectral Flatness Loss
+    const double spectral_flatness_weight = std::get<0>(loss_weights);
+    if (spectral_flatness_weight > 0.0)
+    {
+        constexpr float kTargetSpectralFlatness = 0.5575f;
+        loss_functions.push_back(std::make_shared<fdn_optimization::SpectralFlatnessLoss>(kTargetSpectralFlatness,
+                                                                                          spectral_flatness_weight));
+    }
+
+    // Time Domain Sparsity Loss
+    const double sparsity_weight = std::get<1>(loss_weights);
+    if (sparsity_weight > 0.0)
+    {
+        loss_functions.push_back(std::make_shared<fdn_optimization::TimeDomainSparsityLoss>(sparsity_weight));
+    }
+
+    // Power Envelope Loss
+    // TODO
+
     fdn_optimization::OptimizationInfo opt_info{.parameters_to_optimize = params_to_optimize,
                                                 .initial_fdn_config = initial_fdn_config,
                                                 .ir_size = kSampleRate,
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
-                                                .spectral_flatness_weight = std::get<0>(loss_weights),
-                                                .sparsity_weight = std::get<1>(loss_weights),
-                                                .power_envelope_weight = std::get<2>(loss_weights),
                                                 .target_rir = {},
                                                 .early_fir = {},
                                                 .optimizer_params = optimizer_params};
 
     fdn_optimization::FDNOptimizer optimizer(logger, verbose);
 
+    optimizer.SetLossFunctions(loss_functions);
     optimizer.StartOptimization(opt_info);
 
     while (optimizer.GetStatus() != fdn_optimization::OptimizationStatus::Running)
@@ -232,15 +251,52 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
                                                 .initial_fdn_config = initial_fdn_config,
                                                 .ir_size = static_cast<uint32_t>(target_rir.size()),
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
-                                                .edc_weight = std::get<0>(loss_weights),
-                                                .mel_edr_weight = std::get<1>(loss_weights),
-                                                .weighted_edr_weight = std::get<2>(loss_weights),
                                                 .target_rir = target_rir,
                                                 .early_fir = early_fir,
                                                 .optimizer_params = opt_params};
 
     fdn_optimization::FDNOptimizer optimizer(logger, verbose);
 
+    std::vector<std::shared_ptr<fdn_optimization::AudioLoss>> loss_functions;
+
+    const double edc_weight = std::get<0>(loss_weights);
+    if (edc_weight > 0.0)
+    {
+        loss_functions.push_back(std::make_shared<fdn_optimization::EnergyDecayCurveLoss>(target_rir, edc_weight));
+    }
+
+    constexpr uint32_t kMelEdrFftLength = 4096;
+    constexpr uint32_t kMelEdrHopSize = 128;
+    constexpr uint32_t kMelEdrWindowSize = 1024;
+    constexpr uint32_t kMelEdrNumBands = 64;
+
+    const double mel_edr_weight = std::get<1>(loss_weights);
+    if (mel_edr_weight > 0.0)
+    {
+        audio_utils::analysis::EnergyDecayReliefOptions edr_options{.fft_length = kMelEdrFftLength,
+                                                                    .hop_size = kMelEdrHopSize,
+                                                                    .window_size = kMelEdrWindowSize,
+                                                                    .window_type = audio_utils::FFTWindowType::Hann,
+                                                                    .n_mels = kMelEdrNumBands,
+                                                                    .to_db = true};
+        loss_functions.push_back(
+            std::make_shared<fdn_optimization::EnergyDecayReliefLoss>(target_rir, edr_options, mel_edr_weight));
+    }
+
+    const double weighted_edr_weight = std::get<2>(loss_weights);
+    if (weighted_edr_weight > 0.0)
+    {
+        audio_utils::analysis::EnergyDecayReliefOptions edr_options{.fft_length = kMelEdrFftLength,
+                                                                    .hop_size = kMelEdrHopSize,
+                                                                    .window_size = kMelEdrWindowSize,
+                                                                    .window_type = audio_utils::FFTWindowType::Hann,
+                                                                    .n_mels = kMelEdrNumBands,
+                                                                    .to_db = true};
+        loss_functions.push_back(
+            std::make_shared<fdn_optimization::WeightedEDRLoss>(target_rir, edr_options, -20.0f, weighted_edr_weight));
+    }
+
+    optimizer.SetLossFunctions(loss_functions);
     optimizer.StartOptimization(opt_info);
 
     while (optimizer.GetStatus() != fdn_optimization::OptimizationStatus::Running)

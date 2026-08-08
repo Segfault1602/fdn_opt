@@ -20,7 +20,7 @@ target_sources(
 target_link_libraries(
   fdn_optimization
   PRIVATE audio_utils::audio_utils
-          sfFDN.sfFDN
+          sfFDN::sfFDN
           quill::quill
           Eigen3::Eigen
           Armadillo::Armadillo

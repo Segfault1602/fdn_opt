@@ -68,7 +68,7 @@ void ReturnVectorToPool(std::vector<float>&& vec)
     gVectorPool.push(std::move(vec));
 }
 
-enum class ReductionType
+enum class ReductionType : std::uint8_t
 {
     Mean,
     Sum,
@@ -121,7 +121,7 @@ SpectralFlatnessLoss::SpectralFlatnessLoss(float target, float weight)
 {
 }
 
-float SpectralFlatnessLoss::ComputeLoss(std::span<const float> signal)
+float SpectralFlatnessLoss::ComputeLoss(std::span<const float> signal) const
 {
     uint32_t fft_size = signal.size();
     auto fft_ptr = BorrowFFTForSize(fft_size);
@@ -147,7 +147,7 @@ TimeDomainSparsityLoss::TimeDomainSparsityLoss(float weight)
 {
 }
 
-float TimeDomainSparsityLoss::ComputeLoss(std::span<const float> signal)
+float TimeDomainSparsityLoss::ComputeLoss(std::span<const float> signal) const
 {
     float l1_norm = 0.0f;
     float l2_norm = 0.0f;
@@ -167,7 +167,7 @@ EnergyDecayCurveLoss::EnergyDecayCurveLoss(std::span<const float> target_signal,
 {
 }
 
-float EnergyDecayCurveLoss::ComputeLoss(std::span<const float> signal)
+float EnergyDecayCurveLoss::ComputeLoss(std::span<const float> signal) const
 {
     auto edc = audio_utils::analysis::EnergyDecayCurve(signal, false);
 
@@ -191,7 +191,7 @@ EnergyDecayReliefLoss::EnergyDecayReliefLoss(std::span<const float> target_signa
 {
 }
 
-float EnergyDecayReliefLoss::ComputeLoss(std::span<const float> signal)
+float EnergyDecayReliefLoss::ComputeLoss(std::span<const float> signal) const
 {
     audio_utils::analysis::EnergyDecayReliefResult edr_result =
         audio_utils::analysis::EnergyDecayRelief(signal, options_);
@@ -218,7 +218,7 @@ WeightedEDRLoss::WeightedEDRLoss(std::span<const float> target_signal,
 {
 }
 
-float WeightedEDRLoss::ComputeLoss(std::span<const float> signal)
+float WeightedEDRLoss::ComputeLoss(std::span<const float> signal) const
 {
     audio_utils::analysis::EnergyDecayReliefResult edr_result =
         audio_utils::analysis::EnergyDecayRelief(signal, options_);
@@ -286,7 +286,7 @@ float STFTLoss::MagnitudeLoss(const audio_utils::analysis::STFTResult& x, const 
     return L1Loss(x_mat, y_mat, ReductionType::Mean);
 }
 
-float STFTLoss::ComputeLoss(std::span<const float> signal)
+float STFTLoss::ComputeLoss(std::span<const float> signal) const
 {
     audio_utils::analysis::STFTResult stft_result;
     if (loss_options_.mel_scale)

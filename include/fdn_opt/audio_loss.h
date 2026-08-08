@@ -19,26 +19,26 @@ class AudioLoss
     {
     }
 
-    const std::string& GetName() const
+    std::string GetName() const
     {
         return name_;
     }
 
     virtual ~AudioLoss() = default;
-    virtual float ComputeLoss(std::span<const float> signal) = 0;
+    virtual float ComputeLoss(std::span<const float> signal) const = 0;
 
   protected:
-    const float weight_ = 1.0f;
+    float weight_ = 1.0f;
 
   private:
-    const std::string name_;
+    std::string name_;
 };
 
 class SpectralFlatnessLoss : public AudioLoss
 {
   public:
     SpectralFlatnessLoss(float target, float weight = 1.0f);
-    float ComputeLoss(std::span<const float> signal) override;
+    float ComputeLoss(std::span<const float> signal) const override;
 
   private:
     float target_;
@@ -48,17 +48,17 @@ class TimeDomainSparsityLoss : public AudioLoss
 {
   public:
     TimeDomainSparsityLoss(float weight = 1.0f);
-    float ComputeLoss(std::span<const float> signal) override;
+    float ComputeLoss(std::span<const float> signal) const override;
 };
 
 class EnergyDecayCurveLoss : public AudioLoss
 {
   public:
     EnergyDecayCurveLoss(std::span<const float> target_signal, float weight = 1.0f);
-    float ComputeLoss(std::span<const float> signal) override;
+    float ComputeLoss(std::span<const float> signal) const override;
 
   private:
-    const std::vector<float> target_edc_;
+    std::vector<float> target_edc_;
 };
 
 class EnergyDecayReliefLoss : public AudioLoss
@@ -66,11 +66,11 @@ class EnergyDecayReliefLoss : public AudioLoss
   public:
     EnergyDecayReliefLoss(std::span<const float> target_signal,
                           const audio_utils::analysis::EnergyDecayReliefOptions& options, float weight = 1.0f);
-    float ComputeLoss(std::span<const float> signal) override;
+    float ComputeLoss(std::span<const float> signal) const override;
 
   private:
-    const audio_utils::analysis::EnergyDecayReliefResult target_edr_;
-    const audio_utils::analysis::EnergyDecayReliefOptions options_;
+    audio_utils::analysis::EnergyDecayReliefResult target_edr_;
+    audio_utils::analysis::EnergyDecayReliefOptions options_;
 };
 
 class WeightedEDRLoss : public AudioLoss
@@ -79,13 +79,13 @@ class WeightedEDRLoss : public AudioLoss
     WeightedEDRLoss(std::span<const float> target_signal,
                     const audio_utils::analysis::EnergyDecayReliefOptions& options, float min_db = -60.f,
                     float weight = 1.0f);
-    float ComputeLoss(std::span<const float> signal) override;
+    float ComputeLoss(std::span<const float> signal) const override;
 
   private:
-    const audio_utils::analysis::EnergyDecayReliefResult target_edr_;
-    const audio_utils::analysis::EnergyDecayReliefOptions options_;
+    audio_utils::analysis::EnergyDecayReliefResult target_edr_;
+    audio_utils::analysis::EnergyDecayReliefOptions options_;
 
-    const float min_db_;
+    float min_db_;
 };
 
 struct STFTLossOptions
@@ -102,7 +102,7 @@ class STFTLoss : public AudioLoss
   public:
     STFTLoss(std::span<const float> target_signal, const audio_utils::analysis::STFTOptions& options,
              const STFTLossOptions& loss_options = {}, float weight = 1.0f);
-    float ComputeLoss(std::span<const float> signal) override;
+    float ComputeLoss(std::span<const float> signal) const override;
 
     static float SpectralConvergence(const audio_utils::analysis::STFTResult& x,
                                      const audio_utils::analysis::STFTResult& y);
@@ -111,9 +111,9 @@ class STFTLoss : public AudioLoss
                                bool log);
 
   private:
-    const audio_utils::analysis::STFTResult target_stft_;
-    const audio_utils::analysis::STFTOptions options_;
-    const STFTLossOptions loss_options_;
+    audio_utils::analysis::STFTResult target_stft_;
+    audio_utils::analysis::STFTOptions options_;
+    STFTLossOptions loss_options_;
 };
 
 } // namespace fdn_optimization
