@@ -21,10 +21,11 @@
 #include <filesystem>
 #include <format>
 #include <iostream>
-#include <ostream>
-#include <random>
 #include <thread>
 #include <vector>
+
+namespace
+{
 
 template <typename T>
 void SetOptimizerParams(const T& params, fdn_optimization::OptimizationAlgoParams& optim_params)
@@ -55,9 +56,11 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
     initial_fdn_config.sample_rate = kSampleRate;
     initial_fdn_config.block_size = 128;
     initial_fdn_config.input_block_config.parallel_gains_config = {.mode = sfFDN::ParallelGainsMode::Split,
-                                                                   .gains = std::vector<float>(fdn_order, 0.5f)};
+                                                                   .gains = std::vector<float>(fdn_order, 0.5f),
+                                                                   .time_varying_config = {}};
     initial_fdn_config.output_block_config.parallel_gains_config = {.mode = sfFDN::ParallelGainsMode::Merge,
-                                                                    .gains = std::vector<float>(fdn_order, 0.5f)};
+                                                                    .gains = std::vector<float>(fdn_order, 0.5f),
+                                                                    .time_varying_config = {}};
 
     if (fdn_order == 4)
     {
@@ -79,7 +82,7 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
 
     if (random_delays)
     {
-        std::cout << "Using random delays..." << std::endl;
+        std::cout << "Using random delays..." << "\n";
         initial_fdn_config.delay_bank_config.delays =
             sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Uniform);
     }
@@ -99,7 +102,7 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
 
     if (randomize)
     {
-        std::cout << "Using random initial parameters..." << std::endl;
+        std::cout << "Using random initial parameters..." << "\n";
         // arma::arma_rng::set_seed_random();
         arma::fvec input_gains(fdn_order, arma::fill::randn);
         arma::fvec output_gains(fdn_order, arma::fill::randn);
@@ -130,35 +133,6 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
         }
     }
     return initial_fdn_config;
-}
-
-fdn_optimization::OptimizationResult DoOptimization(quill::Logger* logger, fdn_optimization::OptimizationInfo& opt_info)
-{
-    fdn_optimization::FDNOptimizer optimizer(logger);
-
-    optimizer.StartOptimization(opt_info);
-
-    while (optimizer.GetStatus() != fdn_optimization::OptimizationStatus::Running)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    while (optimizer.GetStatus() != fdn_optimization::OptimizationStatus::Completed)
-    {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-
-        auto progress = optimizer.GetProgress();
-        float last_loss = 0.0f;
-        if (!progress.loss_history.empty() && !progress.loss_history[0].empty())
-        {
-            last_loss = static_cast<float>(progress.loss_history[0].back());
-        }
-        LOG_INFO(logger, "Elapsed Time: {:.2f} s, Evaluations: {}, Last Loss: {:.6f}", progress.elapsed_time.count(),
-                 progress.evaluation_count, last_loss);
-    }
-
-    auto result = optimizer.GetResult();
-    return result;
 }
 
 fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
@@ -323,7 +297,39 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
 }
 
 void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_filename,
-                 const std::filesystem::path& output_dir, quill::Logger* logger);
+                 const std::filesystem::path& output_dir, quill::Logger* logger)
+{
+    std::vector<float> audio_file;
+    int sample_rate = 0;
+    int num_channels = 0;
+    audio_utils::audio_file::ReadWavFile(input_filename, audio_file, sample_rate, num_channels);
+    if (sample_rate != kSampleRate)
+    {
+        LOG_ERROR(logger, "Input audio sample rate {} does not match expected sample rate {}.", sample_rate,
+                  kSampleRate);
+        return;
+    }
+    if (num_channels != 1)
+    {
+        LOG_ERROR(logger, "Input audio has {} channels, but only mono audio is supported.", num_channels);
+        return;
+    }
+
+    auto fdn = sfFDN::CreateFDNFromConfig(fdn_config);
+    fdn->SetDirectGain(0.0f);
+
+    std::vector<float> output_audio(audio_file.size(), 0.0f);
+    sfFDN::AudioBuffer input_buffer(audio_file);
+    sfFDN::AudioBuffer output_buffer(output_audio);
+
+    fdn->Process(input_buffer, output_buffer);
+
+    std::filesystem::path output_path =
+        output_dir / (std::filesystem::path(input_filename).stem().string() + "_wet.wav");
+    audio_utils::audio_file::WriteWavFile(output_path.string(), output_audio, kSampleRate);
+}
+
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -656,7 +662,7 @@ int main(int argc, char** argv)
             LOG_ERROR(logger, "Failed to open file {} for writing target RIR name.", target_rir_name_path.string());
             return -1;
         }
-        file << ir_filename << std::endl;
+        file << ir_filename << "\n";
 
         RenderAudio(result.optimized_fdn_config, "./audio/drumloop.wav", optim_subdir, logger);
         RenderAudio(result.optimized_fdn_config, "./audio/saxophone.wav", optim_subdir, logger);
@@ -664,37 +670,4 @@ int main(int argc, char** argv)
     }
 
     return 0;
-}
-
-void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_filename,
-                 const std::filesystem::path& output_dir, quill::Logger* logger)
-{
-    std::vector<float> audio_file;
-    int sample_rate = 0;
-    int num_channels = 0;
-    audio_utils::audio_file::ReadWavFile(input_filename, audio_file, sample_rate, num_channels);
-    if (sample_rate != kSampleRate)
-    {
-        LOG_ERROR(logger, "Input audio sample rate {} does not match expected sample rate {}.", sample_rate,
-                  kSampleRate);
-        return;
-    }
-    if (num_channels != 1)
-    {
-        LOG_ERROR(logger, "Input audio has {} channels, but only mono audio is supported.", num_channels);
-        return;
-    }
-
-    auto fdn = sfFDN::CreateFDNFromConfig(fdn_config);
-    fdn->SetDirectGain(0.0f);
-
-    std::vector<float> output_audio(audio_file.size(), 0.0f);
-    sfFDN::AudioBuffer input_buffer(audio_file);
-    sfFDN::AudioBuffer output_buffer(output_audio);
-
-    fdn->Process(input_buffer, output_buffer);
-
-    std::filesystem::path output_path =
-        output_dir / (std::filesystem::path(input_filename).stem().string() + "_wet.wav");
-    audio_utils::audio_file::WriteWavFile(output_path.string(), output_audio, kSampleRate);
 }

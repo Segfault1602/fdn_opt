@@ -1,19 +1,22 @@
 #include "audio_loss.h"
 
+#include "vector_pool.h"
+
 #include <audio_utils/audio_analysis.h>
 #include <audio_utils/fft.h>
 
 #include <Eigen/Core>
 
-#include <iostream>
 #include <list>
 #include <mutex>
 #include <queue>
 
 namespace
 {
-static std::list<std::unique_ptr<audio_utils::FFT>> gFFTPool;
-static std::mutex gFFTPoolMutex;
+// The loss functions are called often and, depending on the FFT engine used, the FFTs objects can be expensive to
+// create. Using a pool of preallocated FFTs helps reduce memory allocations and significantly improve performance.
+std::list<std::unique_ptr<audio_utils::FFT>> gFFTPool;
+std::mutex gFFTPoolMutex;
 std::unique_ptr<audio_utils::FFT> BorrowFFTForSize(uint32_t size)
 {
     const uint32_t fft_size = audio_utils::FFT::NextSupportedFFTSize(size);
@@ -37,35 +40,6 @@ void ReturnFFTToPool(std::unique_ptr<audio_utils::FFT> fft)
 {
     std::scoped_lock lock(gFFTPoolMutex);
     gFFTPool.push_back(std::move(fft));
-}
-
-static std::queue<std::vector<float>> gVectorPool;
-static std::mutex gVectorPoolMutex;
-std::vector<float> BorrowVector(size_t size)
-{
-    std::scoped_lock lock(gVectorPoolMutex);
-    if (!gVectorPool.empty())
-    {
-        auto vec = std::move(gVectorPool.front());
-        gVectorPool.pop();
-
-        if (vec.size() != size)
-        {
-            vec.resize(size, 0.0f);
-        }
-
-        return vec;
-    }
-    else
-    {
-        return std::vector<float>(size, 0.0f);
-    }
-}
-
-void ReturnVectorToPool(std::vector<float>&& vec)
-{
-    std::scoped_lock lock(gVectorPoolMutex);
-    gVectorPool.push(std::move(vec));
 }
 
 enum class ReductionType : std::uint8_t
@@ -132,12 +106,12 @@ float SpectralFlatnessLoss::ComputeLoss(std::span<const float> signal) const
     };
 
     // std::vector<float> spectrum(fft_ptr->GetSpectrumSize(), 0.0f);
-    std::vector<float> spectrum = BorrowVector(fft_ptr->GetSpectrumSize());
+    std::vector<float> spectrum = VectorPool::Instance().BorrowVector(fft_ptr->GetSpectrumSize());
     fft_ptr->ForwardMag(signal, std::span(spectrum), fft_options);
     ReturnFFTToPool(std::move(fft_ptr));
 
     auto flatness = audio_utils::analysis::SpectralFlatness(spectrum);
-    ReturnVectorToPool(std::move(spectrum));
+    VectorPool::Instance().ReturnVector(std::move(spectrum));
 
     return std::abs(target_ - flatness) * weight_;
 }

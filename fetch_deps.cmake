@@ -68,13 +68,13 @@ cpmaddpackage(
   "AUDIO_UTILS_ENABLE_HARDENING ON"
   "AUDIO_UTILS_USE_SANITIZER OFF")
 
-cpmaddpackage("gh:Segfault1602/sfFDN@1.0.0")
-#   NAME
-#   sfFDN
-#   GIT_REPOSITORY
-#   https://github.com/Segfault1602/sfFDN.git
-#   GIT_TAG
-#   main)
+cpmaddpackage(
+  NAME
+  sfFDN
+  GIT_REPOSITORY
+  https://github.com/Segfault1602/sfFDN.git
+  GIT_TAG
+  develop)
 
 cpmaddpackage(
   NAME
@@ -87,4 +87,16 @@ cpmaddpackage(
 if(Eigen_ADDED)
   get_target_property(_eigen_inc eigen INTERFACE_INCLUDE_DIRECTORIES)
   target_include_directories(eigen SYSTEM INTERFACE ${_eigen_inc})
+endif()
+
+if(TARGET sfFDN::sfFDN)
+  message(STATUS "sfFDN package found at ${sfFDN_SOURCE_DIR}")
+else()
+  message(FATAL_ERROR "sfFDN package not added correctly")
+endif()
+
+if(TARGET audio_utils::audio_utils)
+  message(STATUS "audio_utils package found at ${audio_utils_SOURCE_DIR}")
+else()
+  message(FATAL_ERROR "audio_utils package not added correctly")
 endif()

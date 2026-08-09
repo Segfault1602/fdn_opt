@@ -5,6 +5,7 @@ target_sources(
           model.cpp
           audio_loss.cpp
           random_searcher.cpp
+          vector_pool.h
   PUBLIC FILE_SET
          "fdn_optimization_headers"
          TYPE

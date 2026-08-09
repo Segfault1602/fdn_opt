@@ -1,48 +1,18 @@
 #include "model.h"
 
+#include "vector_pool.h"
+
 #include <armadillo>
 #include <sffdn/sffdn.h>
 
 #include <cassert>
 #include <cstdint>
 #include <iostream>
-#include <queue>
+#include <utility>
 
 namespace
 {
 constexpr uint32_t kNBands = 10;
-
-namespace
-{
-static std::queue<std::vector<float>> gVectorPool;
-static std::mutex gVectorPoolMutex;
-std::vector<float> BorrowVector(size_t size)
-{
-    std::scoped_lock lock(gVectorPoolMutex);
-    if (!gVectorPool.empty())
-    {
-        auto vec = std::move(gVectorPool.front());
-        gVectorPool.pop();
-
-        if (vec.size() != size)
-        {
-            vec.resize(size, 0.0f);
-        }
-
-        return vec;
-    }
-    else
-    {
-        return std::vector<float>(size, 0.0f);
-    }
-}
-
-void ReturnVectorToPool(std::vector<float>&& vec)
-{
-    std::scoped_lock lock(gVectorPoolMutex);
-    gVectorPool.push(std::move(vec));
-}
-} // namespace
 
 // double Sigmoid(double x)
 // {
@@ -454,7 +424,7 @@ namespace fdn_optimization
 {
 FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
                    std::span<const OptimizationParamType> param_types, GradientMethod gradient_method)
-    : initial_config_(initial_config)
+    : initial_config_(std::move(initial_config))
     , ir_size_(ir_size)
     , param_types_(param_types.begin(), param_types.end())
     , gradient_method_(gradient_method)
@@ -478,7 +448,10 @@ FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
 
     if (!optimize_filters)
     {
-        initial_config_.loop_filter_configs.clear();
+
+        // Cache the initial loop filter config before removing all the attenuation filter banks
+        initial_attenuation_filter_bank_config_ = initial_config_.attenuation_filter_bank_config;
+
         sfFDN::AttenuationFilterBankOptions attenuation_filter_bank_config;
         for (uint32_t i = 0; i < fdn_order; ++i)
         {
@@ -486,10 +459,9 @@ FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
             filter_config.t60 = 1.f;
             filter_config.delay = initial_config_.delay_bank_config.delays[i];
             filter_config.sample_rate = initial_config_.sample_rate;
-            attenuation_filter_bank_config.filter_configs.push_back(filter_config);
+            attenuation_filter_bank_config.filter_configs.emplace_back(filter_config);
         }
-        initial_config_.loop_filter_configs.push_back(attenuation_filter_bank_config);
-
+        initial_config_.attenuation_filter_bank_config = attenuation_filter_bank_config;
         initial_config_.tone_correction_filters.clear();
     }
 
@@ -566,11 +538,10 @@ arma::mat FDNModel::GetInitialParams() const
     return params;
 }
 
-std::vector<float> FDNModel::GenerateIR(const arma::mat& params)
+std::vector<float> FDNModel::GenerateIR(const arma::mat& params) const
 {
-    std::vector<float> impulse_buffer = BorrowVector(ir_size_);
-
-    std::vector<float> response_buffer = BorrowVector(ir_size_);
+    std::vector<float> impulse_buffer = VectorPool::Instance().BorrowVector(ir_size_);
+    std::vector<float> response_buffer = VectorPool::Instance().BorrowVector(ir_size_);
 
     std::ranges::fill(impulse_buffer, 0.0f);
     std::ranges::fill(response_buffer, 0.0f);
@@ -589,20 +560,14 @@ std::vector<float> FDNModel::GenerateIR(const arma::mat& params)
     auto fdn = sfFDN::CreateFDNFromConfig(GetFDNConfig(params));
     fdn->Process(in_buffer, out_buffer);
 
-    ReturnVectorToPool(std::move(impulse_buffer));
+    VectorPool::Instance().ReturnVector(std::move(impulse_buffer));
 
     return response_buffer;
 }
 
-double FDNModel::Evaluate(const arma::mat& params)
+double FDNModel::Evaluate(const arma::mat& params) const
 {
     std::vector<float> ir = GenerateIR(params);
-
-    // // Add noise
-    // for (auto& sample : ir)
-    // {
-    //     sample += 1e-5f * static_cast<float>(arma::randn());
-    // }
 
     double total_loss = 0.0;
     std::vector<double> last_losses;
@@ -615,14 +580,14 @@ double FDNModel::Evaluate(const arma::mat& params)
         total_loss += loss;
     }
 
-    ReturnVectorToPool(std::move(ir));
+    VectorPool::Instance().ReturnVector(std::move(ir));
 
     LossRegistry::Instance().RegisterLoss(last_losses);
 
     return total_loss;
 }
 
-double FDNModel::Evaluate(const arma::mat& params, const size_t i, const size_t batch_size)
+double FDNModel::Evaluate(const arma::mat& params, const size_t i, const size_t batch_size) const
 {
     assert(i == 0 && batch_size == 1);
     (void)i;
@@ -722,24 +687,24 @@ std::string FDNModel::PrintFDNConfig(const arma::mat& params) const
 
     std::stringstream ss;
 
-    ss << "FDN Configuration:----------------------" << std::endl;
-    ss << "Input Gains: " << std::endl;
-    ss << input_gains_arma.t() << std::endl;
-    ss << "Output Gains: " << std::endl;
-    ss << output_gains_arma.t() << std::endl;
+    ss << "FDN Configuration:----------------------\n";
+    ss << "Input Gains: \n";
+    ss << input_gains_arma.t() << "\n";
+    ss << "Output Gains: \n";
+    ss << output_gains_arma.t() << "\n";
     ss << "Delays: [";
     for (const auto& delay : config.delay_bank_config.delays)
     {
         ss << delay << " ";
     }
-    ss << "]" << std::endl;
+    ss << "]\n";
 
     // std::vector<float> matrix_data = std::get<std::vector<float>>(config.feedback_matrix_config);
     // arma::fmat matrix_data_arma(matrix_data.data(), config.fdn_size, config.fdn_size);
 
-    // ss << "Feedback Matrix:" << std::endl;
-    // ss << matrix_data_arma << std::endl;
-    // ss << "----------------------------------------" << std::endl;
+    // ss << "Feedback Matrix:\n";
+    // ss << matrix_data_arma << "\n";
+    // ss << "----------------------------------------\n";
     return ss.str();
 }
 
@@ -752,13 +717,11 @@ void FDNModel::GradientCentralDifferences(const arma::mat& x, arma::mat& g)
     {
         arma::mat x_plus = x;
         x_plus(0, col) += gradient_delta_;
-        // Creating a whole new model to avoid threading issues
-        FDNModel grad_model(*this);
-        double plus_value = grad_model.Evaluate(x_plus);
+        double plus_value = Evaluate(x_plus);
 
         arma::mat x_minus = x;
         x_minus(0, col) -= gradient_delta_;
-        double minus_value = grad_model.Evaluate(x_minus);
+        double minus_value = Evaluate(x_minus);
         g(0, col) = (plus_value - minus_value) / (2 * gradient_delta_);
     }
 }
@@ -772,8 +735,7 @@ void FDNModel::GradientForwardDifferences(const arma::mat& x, arma::mat& g, doub
         arma::mat x_plus = x;
         x_plus(0, col) += gradient_delta_;
         // Creating a whole new model to avoid threading issues
-        FDNModel grad_model(*this);
-        double plus_value = grad_model.Evaluate(x_plus);
+        double plus_value = Evaluate(x_plus);
         g(0, col) = (plus_value - current_loss) / gradient_delta_;
     }
 }

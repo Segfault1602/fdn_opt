@@ -573,6 +573,12 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
 
         optimized_config_ = model.GetFDNConfig(params);
 
+        if (!optimizing_filters)
+        {
+            // If we are not optimizing filters, we can copy the initial filter configs to the optimized config
+            optimized_config_.attenuation_filter_bank_config = info.initial_fdn_config.attenuation_filter_bank_config;
+        }
+
         optimization_result_.initial_fdn_config = initial_config;
         optimization_result_.optimized_fdn_config = optimized_config_;
         optimization_result_.total_time = std::chrono::steady_clock::now() - start_time_;

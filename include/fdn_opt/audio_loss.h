@@ -19,6 +19,12 @@ class AudioLoss
     {
     }
 
+    AudioLoss(const AudioLoss&) = default;
+    AudioLoss(AudioLoss&&) = default;
+
+    AudioLoss& operator=(const AudioLoss&) = default;
+    AudioLoss& operator=(AudioLoss&&) = default;
+
     std::string GetName() const
     {
         return name_;
@@ -34,6 +40,13 @@ class AudioLoss
     std::string name_;
 };
 
+/**
+ * @brief Spectral flatness loss
+ *
+ * The spectral flatness loss computes the spectral flatness of the input signal and compares it to a target value. The
+ * loss is calculated as the absolute difference between the target and the computed spectral flatness, scaled by a
+ * weight factor.
+ */
 class SpectralFlatnessLoss : public AudioLoss
 {
   public:
@@ -44,6 +57,13 @@ class SpectralFlatnessLoss : public AudioLoss
     float target_;
 };
 
+/**
+ * @brief Time domain sparsity loss
+ *
+ * The time domain sparsity loss computes the sparsity of the input signal in the time domain. It calculates the L1 and
+ * L2 norms of the signal and returns the ratio of the L2 norm to the L1 norm, scaled by a weight factor. A lower ratio
+ * indicates a sparser signal.
+ */
 class TimeDomainSparsityLoss : public AudioLoss
 {
   public:
@@ -51,6 +71,13 @@ class TimeDomainSparsityLoss : public AudioLoss
     float ComputeLoss(std::span<const float> signal) const override;
 };
 
+/**
+ * @brief Energy decay curve loss
+ *
+ * The energy decay curve loss computes the energy decay curve of the input signal and compares it to a target energy
+ * decay curve. The loss is calculated as the mean squared error between the target and the computed energy decay curve,
+ * scaled by a weight factor.
+ */
 class EnergyDecayCurveLoss : public AudioLoss
 {
   public:
@@ -61,6 +88,13 @@ class EnergyDecayCurveLoss : public AudioLoss
     std::vector<float> target_edc_;
 };
 
+/**
+ * @brief Energy decay relief loss
+ *
+ * The energy decay relief loss computes the energy decay relief of the input signal and compares it to a target energy
+ * decay relief. The loss is calculated as the mean squared error between the target and the computed energy decay
+ * relief, scaled by a weight factor.
+ */
 class EnergyDecayReliefLoss : public AudioLoss
 {
   public:
@@ -73,6 +107,14 @@ class EnergyDecayReliefLoss : public AudioLoss
     audio_utils::analysis::EnergyDecayReliefOptions options_;
 };
 
+/**
+ * @brief Weighted energy decay relief loss
+ *
+ * The weighted energy decay relief loss computes the energy decay relief of the input signal and compares it to a
+ * target energy decay relief. The loss is calculated as the mean squared error between the target and the computed
+ * energy decay relief. Only the portion of the energy decay relief that is above a specified minimum dB threshold is
+ * considered in the loss calculation. The loss is scaled by a weight factor.
+ */
 class WeightedEDRLoss : public AudioLoss
 {
   public:
@@ -97,6 +139,13 @@ struct STFTLossOptions
     uint32_t n_mels = 32;
 };
 
+/**
+ * @brief Short-time Fourier transform loss
+ *
+ * The STFT loss computes the STFT of the input signal and compares it to a target STFT. The loss is calculated as a
+ * combination of spectral convergence, log-magnitude loss, and linear-magnitude loss, each scaled by their respective
+ * weight factors.
+ */
 class STFTLoss : public AudioLoss
 {
   public:

@@ -6,6 +6,7 @@
 
 #include "audio_loss.h"
 #include "optim_types.h"
+#include "sffdn/types.h"
 
 #include <cstdint>
 #include <memory>
@@ -70,10 +71,10 @@ class FDNModel
 
     arma::mat GetInitialParams() const;
 
-    std::vector<float> GenerateIR(const arma::mat& params);
+    std::vector<float> GenerateIR(const arma::mat& params) const;
 
-    double Evaluate(const arma::mat& params);
-    double Evaluate(const arma::mat& params, const size_t i, const size_t batch_size);
+    double Evaluate(const arma::mat& params) const;
+    double Evaluate(const arma::mat& params, const size_t i, const size_t batch_size) const;
 
     double EvaluateWithGradient(const arma::mat& x, arma::mat& g);
     double EvaluateWithGradient(const arma::mat& x, const size_t i, arma::mat& g, const size_t batchSize);
@@ -85,6 +86,11 @@ class FDNModel
     size_t NumFunctions() const
     {
         return 1;
+    }
+
+    const std::optional<sfFDN::AttenuationFilterBankOptions>& GetInitialFilterBankOptions() const
+    {
+        return initial_attenuation_filter_bank_config_;
     }
 
     void Shuffle()
@@ -110,6 +116,8 @@ class FDNModel
 
     GradientMethod gradient_method_ = GradientMethod::CentralDifferences;
     std::vector<float> early_fir_;
+
+    std::optional<sfFDN::AttenuationFilterBankOptions> initial_attenuation_filter_bank_config_;
 
     void GradientCentralDifferences(const arma::mat& x, arma::mat& g);
     void GradientForwardDifferences(const arma::mat& x, arma::mat& g, double current_loss);
