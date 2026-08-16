@@ -222,23 +222,9 @@ arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig& config, const arma:
     attenuation_config.q = 1.f / std::numbers::sqrt2_v<float>;
     attenuation_config.sample_rate = config.sample_rate;
 
-    sfFDN::AttenuationFilterBankOptions* filter_bank_config_ptr = nullptr;
-    for (auto& filter : config.loop_filter_configs)
-    {
-        if (std::holds_alternative<sfFDN::AttenuationFilterBankOptions>(filter))
-        {
-            auto& filter_bank_config = std::get<sfFDN::AttenuationFilterBankOptions>(filter);
-            filter_bank_config_ptr = &filter_bank_config;
-            break;
-        }
-    }
+    sfFDN::AttenuationFilterBankOptions filter_bank_config;
 
-    if (!filter_bank_config_ptr)
-    {
-        throw std::runtime_error("Expected at least one AttenuationFilterBankOptions in loop_filter_configs");
-    }
-
-    filter_bank_config_ptr->filter_configs.clear();
+    filter_bank_config.filter_configs.clear();
 
     t60 = arma::abs(t60);
     t60 = arma::clamp(t60, 0.1, 20.0);
@@ -249,8 +235,10 @@ arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig& config, const arma:
         filter_config_copy.t60s[0] = static_cast<float>(t60(0, n * 3 + 0));
         filter_config_copy.t60s[1] = static_cast<float>(t60(0, n * 3 + 1));
         filter_config_copy.t60s[2] = static_cast<float>(t60(0, n * 3 + 2));
-        filter_bank_config_ptr->filter_configs.push_back(filter_config_copy);
+        filter_bank_config.filter_configs.emplace_back(filter_config_copy);
     }
+
+    config.attenuation_filter_bank_config = filter_bank_config;
 
     const size_t start_offset = kParamCount;
     if (params.n_cols <= start_offset)

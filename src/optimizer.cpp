@@ -409,6 +409,12 @@ void FDNOptimizer::StartOptimization(OptimizationInfo& info)
         return; // Already running
     }
 
+    LOG_INFO(logger_, "Optimizing for: ");
+    for (auto p : info.parameters_to_optimize)
+    {
+        LOG_INFO(logger_, "  - {}", OptimizationParamTypeToString(p));
+    }
+
     status_.store(OptimizationStatus::StartRequested);
 
     // Copy the OptimizationInfo to send to the thread
