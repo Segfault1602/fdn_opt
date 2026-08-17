@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -134,7 +135,7 @@ struct CMAESParameters
     size_t population_size = 10;
     size_t max_iterations = 1000000000;
     double tolerance = 1e-5;
-    double step_size = 0 / 108;
+    double step_size = 0.108;
 };
 
 enum class OptimizationAlgoType : uint8_t
@@ -239,12 +240,14 @@ class FDNOptimizer
     void ResetStatus();
 
     OptimizationStatus GetStatus() const;
+    OptimizationStatus WaitForCompletion();
     OptimizationProgressInfo GetProgress();
 
     OptimizationResult GetResult();
 
   private:
     void ThreadProc(std::stop_token stop_token, OptimizationInfo info);
+    void SetStatus(OptimizationStatus status);
 
     quill::Logger* logger_;
     bool verbose_;
@@ -253,6 +256,7 @@ class FDNOptimizer
     std::chrono::steady_clock::time_point start_time_;
     std::jthread thread_;
     std::mutex mutex_;
+    std::condition_variable status_cv_;
 
     sfFDN::FDNConfig optimized_config_;
     OptimizationResult optimization_result_;

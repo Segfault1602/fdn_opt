@@ -10,6 +10,7 @@
 
 #include <armadillo>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -177,20 +178,17 @@ inline void SaveImpulseResponse(const sfFDN::FDNConfig& config, uint32_t ir_leng
 
     std::vector<float> input_data(ir_length, 0.0f);
 
-    if (early_fir.empty())
-    {
-        input_data[0] = 1.0f; // Delta impulse
-    }
-    else
-    {
-        std::copy(early_fir.begin(), early_fir.end(), input_data.begin());
-    }
+    input_data[0] = 1.0f;
 
     std::vector<float> impulse_response(ir_length, 0.0f);
     sfFDN::AudioBuffer impulse_buffer(impulse_response);
 
     sfFDN::AudioBuffer in_buffer(input_data);
     fdn->Process(in_buffer, impulse_buffer);
+
+    const size_t copy_size = std::min(impulse_response.size(), early_fir.size());
+    for (size_t index = 0; index < copy_size; ++index)
+        impulse_response[index] += early_fir[index];
 
     LOG_INFO(logger, "Writing impulse response to file: {}", filename.string());
     audio_utils::audio_file::WriteWavFile(filename.string(), impulse_response, kSampleRate);

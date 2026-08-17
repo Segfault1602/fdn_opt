@@ -50,11 +50,12 @@ class AudioLoss
 class SpectralFlatnessLoss : public AudioLoss
 {
   public:
-    SpectralFlatnessLoss(float target, float weight = 1.0f);
+    SpectralFlatnessLoss(float target, float weight = 1.0f, uint32_t fft_size = 0);
     float ComputeLoss(std::span<const float> signal) const override;
 
   private:
     float target_;
+    uint32_t fft_size_;
 };
 
 /**
@@ -67,8 +68,11 @@ class SpectralFlatnessLoss : public AudioLoss
 class TimeDomainSparsityLoss : public AudioLoss
 {
   public:
-    TimeDomainSparsityLoss(float weight = 1.0f);
+    TimeDomainSparsityLoss(float weight = 1.0f, size_t max_samples = 0);
     float ComputeLoss(std::span<const float> signal) const override;
+
+  private:
+    size_t max_samples_;
 };
 
 /**

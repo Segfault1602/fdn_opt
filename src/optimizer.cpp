@@ -8,6 +8,7 @@
 #include <armadillo>
 #include <ensmallen.hpp>
 
+#include <cmath>
 #include <iostream>
 #include <thread>
 
@@ -394,6 +395,15 @@ FDNOptimizer::~FDNOptimizer()
     }
 }
 
+void FDNOptimizer::SetStatus(OptimizationStatus status)
+{
+    {
+        std::scoped_lock lock(mutex_);
+        status_.store(status);
+    }
+    status_cv_.notify_all();
+}
+
 void FDNOptimizer::SetLossFunctions(std::span<std::shared_ptr<AudioLoss>> loss_functions)
 {
     std::scoped_lock lock(mutex_);
@@ -415,44 +425,77 @@ void FDNOptimizer::StartOptimization(OptimizationInfo& info)
         LOG_INFO(logger_, "  - {}", OptimizationParamTypeToString(p));
     }
 
-    status_.store(OptimizationStatus::StartRequested);
+    SetStatus(OptimizationStatus::StartRequested);
 
     // Copy the OptimizationInfo to send to the thread
     OptimizationInfo info_copy = info;
 
     LOG_INFO(logger_, "Starting optimization.");
     start_time_ = std::chrono::steady_clock::now();
-    thread_ = std::jthread([this, info_copy](std::stop_token st) { ThreadProc(st, info_copy); });
-    status_.store(OptimizationStatus::Running);
+    thread_ = std::jthread([this, info_copy](std::stop_token st) {
+        try
+        {
+            ThreadProc(st, info_copy);
+        }
+        catch (const std::exception& error)
+        {
+            LOG_ERROR(logger_, "Optimization failed: {}", error.what());
+            SetStatus(OptimizationStatus::Failed);
+        }
+        catch (...)
+        {
+            LOG_ERROR(logger_, "Optimization failed with an unknown exception.");
+            SetStatus(OptimizationStatus::Failed);
+        }
+    });
 }
 
 void FDNOptimizer::CancelOptimization()
 {
-    if (status_.load() != OptimizationStatus::Running)
     {
-        LOG_WARNING(logger_, "Optimization is not running.");
-        return; // Not running
+        std::scoped_lock lock(mutex_);
+        const auto current_status = status_.load();
+        if (current_status != OptimizationStatus::Running && current_status != OptimizationStatus::StartRequested)
+        {
+            LOG_WARNING(logger_, "Optimization is not running.");
+            return;
+        }
+        status_.store(OptimizationStatus::CancelRequested);
     }
 
     LOG_INFO(logger_, "Requesting optimization cancellation.");
-    status_.store(OptimizationStatus::CancelRequested);
+    status_cv_.notify_all();
     thread_.request_stop();
 }
 
 void FDNOptimizer::ResetStatus()
 {
-    if (status_.load() == OptimizationStatus::Running)
+    const auto current_status = status_.load();
+    if (current_status == OptimizationStatus::Running || current_status == OptimizationStatus::StartRequested ||
+        current_status == OptimizationStatus::CancelRequested)
     {
         LOG_WARNING(logger_, "Cannot reset status while optimization is running. Cancelling first.");
-        CancelOptimization();
+        if (current_status != OptimizationStatus::CancelRequested)
+            CancelOptimization();
         thread_.join();
     }
 
-    status_.store(OptimizationStatus::Ready);
+    SetStatus(OptimizationStatus::Ready);
 }
 
 OptimizationStatus FDNOptimizer::GetStatus() const
 {
+    return status_.load();
+}
+
+OptimizationStatus FDNOptimizer::WaitForCompletion()
+{
+    std::unique_lock lock(mutex_);
+    status_cv_.wait(lock, [this] {
+        const auto status = status_.load();
+        return status == OptimizationStatus::Completed || status == OptimizationStatus::Canceled ||
+               status == OptimizationStatus::Failed;
+    });
     return status_.load();
 }
 
@@ -485,7 +528,18 @@ OptimizationResult FDNOptimizer::GetResult()
 void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
 {
     LOG_INFO(logger_, "Optimization thread started.");
-    status_.store(OptimizationStatus::Running);
+    bool canceled_before_start = false;
+    {
+        std::scoped_lock lock(mutex_);
+        canceled_before_start = status_.load() == OptimizationStatus::CancelRequested;
+        status_.store(canceled_before_start ? OptimizationStatus::Canceled : OptimizationStatus::Running);
+    }
+    status_cv_.notify_all();
+    if (canceled_before_start)
+    {
+        LOG_WARNING(logger_, "Optimization was canceled before the worker started.");
+        return;
+    }
 
     bool optimizing_filters =
         std::ranges::find(info.parameters_to_optimize, fdn_optimization::OptimizationParamType::AttenuationFilters) !=
@@ -501,7 +555,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     if (optimizing_filters && info.target_rir.empty())
     {
         LOG_ERROR(logger_, "Target RIR must be provided when optimizing filters. Cancelling optimization.");
-        status_.store(OptimizationStatus::Failed);
+        SetStatus(OptimizationStatus::Failed);
         return;
     }
 
@@ -552,11 +606,16 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     LOG_INFO(logger_, "Initial parameters: {}", param_stream.str());
 
     auto initial_loss = model.Evaluate(params);
+    if (!std::isfinite(initial_loss))
+        throw std::runtime_error("Initial objective is not finite.");
     LOG_INFO(logger_, "Initial loss: {}", initial_loss);
 
     sfFDN::FDNConfig initial_config = model.GetFDNConfig(params);
 
-    optim_callback_ = std::make_unique<OptimCallback>(stop_token);
+    {
+        std::scoped_lock lock(mutex_);
+        optim_callback_ = std::make_unique<OptimCallback>(stop_token);
+    }
 
     OptimizationVisitor visitor{.params = params,
                                 .model = model,
@@ -567,6 +626,8 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     std::visit(visitor, info.optimizer_params);
 
     double final_loss = model.Evaluate(params);
+    if (!std::isfinite(final_loss))
+        throw std::runtime_error("Final objective is not finite.");
     LOG_INFO(logger_, "Final loss: {}", final_loss);
     std::string final_config_str = model.PrintFDNConfig(params);
     LOG_INFO(logger_, "Final config:\n{}", final_config_str);
@@ -600,16 +661,19 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         }
     }
 
-    auto current_status = status_.load();
-    if (current_status == OptimizationStatus::CancelRequested)
+    OptimizationStatus final_status;
     {
-        status_.store(OptimizationStatus::Canceled);
-        LOG_WARNING(logger_, "Optimization was canceled.");
-        return;
+        std::scoped_lock lock(mutex_);
+        final_status = status_.load() == OptimizationStatus::CancelRequested ? OptimizationStatus::Canceled
+                                                                             : OptimizationStatus::Completed;
+        status_.store(final_status);
     }
+    status_cv_.notify_all();
 
-    status_.store(OptimizationStatus::Completed);
-    LOG_INFO(logger_, "Optimization thread completed.");
+    if (final_status == OptimizationStatus::Canceled)
+        LOG_WARNING(logger_, "Optimization was canceled.");
+    else
+        LOG_INFO(logger_, "Optimization thread completed.");
 }
 
 } // namespace fdn_optimization

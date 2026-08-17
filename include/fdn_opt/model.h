@@ -16,6 +16,8 @@
 namespace fdn_optimization
 {
 
+void ValidateAttenuationFilterConfiguration(const sfFDN::FDNConfig& config);
+
 class LossRegistry
 {
   public:

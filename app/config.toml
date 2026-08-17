@@ -4,7 +4,7 @@ num_channels = 8
 spectral_flatness_weight = 1
 sparsity_weight = 0.5
 power_envelope_weight = 0
-edc_weight = 1
+edc_weight = 0.1
 mel_edr_weight = 1
 weighted_edr_weight = 0
 randomize_initial_params = false
@@ -27,7 +27,7 @@ gradient_delta = 0.0001
 step_size = 0.442
 beta1 = 0.9
 beta2 = 0.851
-tolerance = 1e-4
+tolerance = 1e-5
 gradient_delta = 1e-2
 
 [SPSA]

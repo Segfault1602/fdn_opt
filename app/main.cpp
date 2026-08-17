@@ -98,7 +98,7 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
             .t60 = 1.f, .delay = initial_fdn_config.delay_bank_config.delays[i], .sample_rate = kSampleRate};
         loop_filters.filter_configs.push_back(c);
     }
-    initial_fdn_config.loop_filter_configs = {loop_filters};
+    initial_fdn_config.attenuation_filter_bank_config = std::move(loop_filters);
 
     if (randomize)
     {
@@ -135,6 +135,39 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
     return initial_fdn_config;
 }
 
+fdn_optimization::OptimizationStatus WaitForOptimization(fdn_optimization::FDNOptimizer& optimizer,
+                                                         quill::Logger* logger)
+{
+    using namespace std::chrono_literals;
+
+    auto next_progress_log = std::chrono::steady_clock::now() + 1s;
+    while (true)
+    {
+        const auto status = optimizer.GetStatus();
+        if (status == fdn_optimization::OptimizationStatus::Completed ||
+            status == fdn_optimization::OptimizationStatus::Canceled ||
+            status == fdn_optimization::OptimizationStatus::Failed)
+        {
+            return status;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_progress_log)
+        {
+            const auto progress = optimizer.GetProgress();
+            float last_loss = 0.0f;
+            if (!progress.loss_history.empty() && !progress.loss_history.front().empty())
+                last_loss = static_cast<float>(progress.loss_history.front().back());
+
+            LOG_DEBUG(logger, "Elapsed Time: {:.2f} s, Evaluations: {}, Last Loss: {:.6f}",
+                      progress.elapsed_time.count(), progress.evaluation_count, last_loss);
+            next_progress_log = now + 1s;
+        }
+
+        std::this_thread::sleep_for(100ms);
+    }
+}
+
 fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                        const sfFDN::FDNConfig& initial_fdn_config,
                                                        const fdn_optimization::OptimizationAlgoParams& optimizer_params,
@@ -152,15 +185,15 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
     if (spectral_flatness_weight > 0.0)
     {
         constexpr float kTargetSpectralFlatness = 0.5575f;
-        loss_functions.push_back(std::make_shared<fdn_optimization::SpectralFlatnessLoss>(kTargetSpectralFlatness,
-                                                                                          spectral_flatness_weight));
+        loss_functions.push_back(std::make_shared<fdn_optimization::SpectralFlatnessLoss>(
+            kTargetSpectralFlatness, spectral_flatness_weight, 65536));
     }
 
     // Time Domain Sparsity Loss
     const double sparsity_weight = std::get<1>(loss_weights);
     if (sparsity_weight > 0.0)
     {
-        loss_functions.push_back(std::make_shared<fdn_optimization::TimeDomainSparsityLoss>(sparsity_weight));
+        loss_functions.push_back(std::make_shared<fdn_optimization::TimeDomainSparsityLoss>(sparsity_weight, 4096));
     }
 
     // Power Envelope Loss
@@ -179,44 +212,20 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
     optimizer.SetLossFunctions(loss_functions);
     optimizer.StartOptimization(opt_info);
 
-    while (optimizer.GetStatus() != fdn_optimization::OptimizationStatus::Running)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    while (optimizer.GetStatus() != fdn_optimization::OptimizationStatus::Completed)
-    {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-
-        auto progress = optimizer.GetProgress();
-        float last_loss = 0.0f;
-        if (!progress.loss_history.empty() && !progress.loss_history[0].empty())
-        {
-            last_loss = static_cast<float>(progress.loss_history[0].back());
-        }
-        LOG_DEBUG(logger, "Elapsed Time: {:.2f} s, Evaluations: {}, Last Loss: {:.6f}", progress.elapsed_time.count(),
-                  progress.evaluation_count, last_loss);
-    }
+    if (WaitForOptimization(optimizer, logger) != fdn_optimization::OptimizationStatus::Completed)
+        throw std::runtime_error("Colorless optimization did not complete successfully.");
 
     auto result = optimizer.GetResult();
     return result;
 }
 
 fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, const sfFDN::FDNConfig& initial_fdn_config,
-                                                      const fdn_optimization::OptimizationAlgoParams&,
+                                                      const fdn_optimization::OptimizationAlgoParams& optimizer_params,
                                                       const std::vector<float>& target_rir,
                                                       const std::vector<float>& early_fir,
                                                       const std::tuple<double, double, double>& loss_weights,
                                                       bool verbose)
 {
-    fdn_optimization::AdamParameters opt_params{.step_size = 0.1,
-                                                .learning_rate_decay = 1.0,
-                                                .decay_step_size = 1,
-                                                .epoch_restarts = 180,
-                                                .max_restarts = 0,
-                                                .tolerance = 1e-3,
-                                                .gradient_delta = 1e-1};
-
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::AttenuationFilters,
                                       fdn_optimization::OptimizationParamType::TonecorrectionFilters,
                                       fdn_optimization::OptimizationParamType::OverallGain};
@@ -227,7 +236,7 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
                                                 .target_rir = target_rir,
                                                 .early_fir = early_fir,
-                                                .optimizer_params = opt_params};
+                                                .optimizer_params = optimizer_params};
 
     fdn_optimization::FDNOptimizer optimizer(logger, verbose);
 
@@ -242,7 +251,7 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
     constexpr uint32_t kMelEdrFftLength = 4096;
     constexpr uint32_t kMelEdrHopSize = 128;
     constexpr uint32_t kMelEdrWindowSize = 1024;
-    constexpr uint32_t kMelEdrNumBands = 64;
+    constexpr uint32_t kMelEdrNumBands = 32;
 
     const double mel_edr_weight = std::get<1>(loss_weights);
     if (mel_edr_weight > 0.0)
@@ -273,31 +282,15 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
     optimizer.SetLossFunctions(loss_functions);
     optimizer.StartOptimization(opt_info);
 
-    while (optimizer.GetStatus() != fdn_optimization::OptimizationStatus::Running)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    while (optimizer.GetStatus() != fdn_optimization::OptimizationStatus::Completed)
-    {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-
-        auto progress = optimizer.GetProgress();
-        float last_loss = 0.0f;
-        if (!progress.loss_history.empty() && !progress.loss_history[0].empty())
-        {
-            last_loss = static_cast<float>(progress.loss_history[0].back());
-        }
-        LOG_DEBUG(logger, "Elapsed Time: {:.2f} s, Evaluations: {}, Last Loss: {:.6f}", progress.elapsed_time.count(),
-                  progress.evaluation_count, last_loss);
-    }
+    if (WaitForOptimization(optimizer, logger) != fdn_optimization::OptimizationStatus::Completed)
+        throw std::runtime_error("Spectrum optimization did not complete successfully.");
 
     auto result = optimizer.GetResult();
     return result;
 }
 
 void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_filename,
-                 const std::filesystem::path& output_dir, quill::Logger* logger)
+                 const std::filesystem::path& output_dir, quill::Logger* logger, std::span<const float> early_fir)
 {
     std::vector<float> audio_file;
     int sample_rate = 0;
@@ -323,6 +316,14 @@ void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_fi
     sfFDN::AudioBuffer output_buffer(output_audio);
 
     fdn->Process(input_buffer, output_buffer);
+
+    if (!early_fir.empty())
+    {
+        auto direct_audio = audio_utils::analysis::Convolve(audio_file, early_fir);
+        direct_audio.resize(output_audio.size());
+        for (size_t index = 0; index < output_audio.size(); ++index)
+            output_audio[index] += direct_audio[index];
+    }
 
     std::filesystem::path output_path =
         output_dir / (std::filesystem::path(input_filename).stem().string() + "_wet.wav");
@@ -362,14 +363,14 @@ int main(int argc, char** argv)
     double spectral_flatness_weight = 1.0;
     app.add_option("--spectral_flatness_weight", spectral_flatness_weight, "Weight for spectral flatness loss term")
         ->default_val(1.0);
-    double sparsity_weight = 1.0;
-    app.add_option("--sparsity_weight", sparsity_weight, "Weight for sparsity loss term")->default_val(1.0);
+    double sparsity_weight = 0.5;
+    app.add_option("--sparsity_weight", sparsity_weight, "Weight for sparsity loss term")->default_val(0.5);
     double power_envelope_weight = 0.0;
     app.add_option("--power_envelope_weight", power_envelope_weight, "Weight for power envelope loss term")
         ->default_val(0.0);
 
-    double edc_weight = 1.0;
-    app.add_option("--edc_weight", edc_weight, "Weight for EDC loss term")->default_val(1.0);
+    double edc_weight = 0.1;
+    app.add_option("--edc_weight", edc_weight, "Weight for EDC loss term")->default_val(0.1);
     double mel_edr_weight = 1.0;
     app.add_option("--mel_edr_weight", mel_edr_weight, "Weight for Mel EDR loss term")->default_val(1.0);
     double weighted_edr_weight = 0.0;
@@ -521,6 +522,12 @@ int main(int argc, char** argv)
     app.require_subcommand(1);
     CLI11_PARSE(app, argc, argv);
 
+    if (!colorless_only && ir_filename.empty())
+    {
+        std::cerr << "RIR matching requires --ir; use --colorless_only to skip matching.\n";
+        return -1;
+    }
+
     if (verbose)
     {
         logger->set_log_level(quill::LogLevel::Debug);
@@ -571,9 +578,17 @@ int main(int argc, char** argv)
     LOG_INFO(logger, "Starting colorless optimization...");
     fdn_optimization::OptimizationResult result;
 
-    result =
-        OptimizeColorless(logger, initial_fdn_config, optimizer_params,
-                          std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight), verbose);
+    try
+    {
+        result =
+            OptimizeColorless(logger, initial_fdn_config, optimizer_params,
+                              std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight), verbose);
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "Colorless optimization failed: " << error.what() << '\n';
+        return -1;
+    }
 
     LOG_INFO(logger, "[Colorless] Final loss: {:.6f}", result.best_loss);
     LOG_INFO(logger, "[Colorless] Elapsed time: {:.4f} s", result.total_time.count());
@@ -606,6 +621,11 @@ int main(int argc, char** argv)
         if (audio_utils::audio_file::ReadWavFile(ir_filename, target_rir, sample_rate, num_channels))
         {
             LOG_INFO(logger, "Loaded {} with {} samples at {} Hz.", ir_filename, target_rir.size(), sample_rate);
+            if (sample_rate != kSampleRate || num_channels != 1)
+            {
+                LOG_ERROR(logger, "Target RIR must be mono at {} Hz.", kSampleRate);
+                return -1;
+            }
         }
         else
         {
@@ -630,6 +650,11 @@ int main(int argc, char** argv)
         if (audio_utils::audio_file::ReadWavFile(early_fir_path, early_fir, sample_rate, num_channels))
         {
             LOG_INFO(logger, "Loaded {} with {} samples at {} Hz.", early_fir_path, early_fir.size(), sample_rate);
+            if (sample_rate != kSampleRate || num_channels != 1 || early_fir.size() > target_rir.size())
+            {
+                LOG_ERROR(logger, "Early FIR must be mono at {} Hz and no longer than the target RIR.", kSampleRate);
+                return -1;
+            }
         }
         else
         {
@@ -638,8 +663,16 @@ int main(int argc, char** argv)
         }
     }
 
-    result = OptimizeSpectrum(logger, initial_fdn_config, optimizer_params, target_rir, early_fir,
-                              std::make_tuple(edc_weight, mel_edr_weight, weighted_edr_weight), verbose);
+    try
+    {
+        result = OptimizeSpectrum(logger, initial_fdn_config, optimizer_params, target_rir, early_fir,
+                                  std::make_tuple(edc_weight, mel_edr_weight, weighted_edr_weight), verbose);
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "RIR-matching optimization failed: " << error.what() << '\n';
+        return -1;
+    }
     LOG_INFO(logger, "[Spectrum] Final loss: {:.6f}", result.best_loss);
     LOG_INFO(logger, "[Spectrum] Elapsed time: {:.4f} s", result.total_time.count());
     LOG_INFO(logger, "[Spectrum] Total evaluations: {}", result.total_evaluations);
@@ -664,9 +697,9 @@ int main(int argc, char** argv)
         }
         file << ir_filename << "\n";
 
-        RenderAudio(result.optimized_fdn_config, "./audio/drumloop.wav", optim_subdir, logger);
-        RenderAudio(result.optimized_fdn_config, "./audio/saxophone.wav", optim_subdir, logger);
-        RenderAudio(result.optimized_fdn_config, "./audio/bleepsandbloops.wav", optim_subdir, logger);
+        RenderAudio(result.optimized_fdn_config, "./audio/drumloop.wav", optim_subdir, logger, early_fir);
+        RenderAudio(result.optimized_fdn_config, "./audio/saxophone.wav", optim_subdir, logger, early_fir);
+        RenderAudio(result.optimized_fdn_config, "./audio/bleepsandbloops.wav", optim_subdir, logger, early_fir);
     }
 
     return 0;

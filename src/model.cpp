@@ -178,27 +178,14 @@ arma::mat ParamsToAttenuationFilters_10Bands(sfFDN::FDNConfig& config, const arm
         attenuation_config.t60s[i] = static_cast<float>(t60s(0, i));
     }
 
-    uint32_t filter_count = 0;
-    for (auto& filter : config.loop_filter_configs)
+    sfFDN::AttenuationFilterBankOptions filter_bank_config;
+    for (auto i = 0u; i < config.fdn_size; ++i)
     {
-        if (std::holds_alternative<sfFDN::AttenuationFilterBankOptions>(filter))
-        {
-            ++filter_count;
-            auto& filter_bank_config = std::get<sfFDN::AttenuationFilterBankOptions>(filter);
-            filter_bank_config.filter_configs.clear();
-            for (auto i = 0u; i < config.fdn_size; ++i)
-            {
-                sfFDN::TenBandFilterOptions filter_config_copy = attenuation_config;
-                filter_config_copy.delay = config.delay_bank_config.delays[i];
-                filter_bank_config.filter_configs.push_back(filter_config_copy);
-            }
-        }
+        sfFDN::TenBandFilterOptions filter_config_copy = attenuation_config;
+        filter_config_copy.delay = config.delay_bank_config.delays[i];
+        filter_bank_config.filter_configs.push_back(filter_config_copy);
     }
-
-    if (filter_count != 1)
-    {
-        throw std::runtime_error("Expected exactly one AttenuationFilterBankOptions in loop_filter_configs");
-    }
+    config.attenuation_filter_bank_config = std::move(filter_bank_config);
 
     const size_t start_offset = kNBands;
     if (params.n_cols <= start_offset)
@@ -238,7 +225,7 @@ arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig& config, const arma:
         filter_bank_config.filter_configs.emplace_back(filter_config_copy);
     }
 
-    config.attenuation_filter_bank_config = filter_bank_config;
+    config.attenuation_filter_bank_config = std::move(filter_bank_config);
 
     const size_t start_offset = kParamCount;
     if (params.n_cols <= start_offset)
@@ -410,6 +397,19 @@ arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig& config,
 
 namespace fdn_optimization
 {
+void ValidateAttenuationFilterConfiguration(const sfFDN::FDNConfig& config)
+{
+    const bool has_legacy_attenuation =
+        std::ranges::any_of(config.loop_filter_configs, [](const auto& processor) {
+            return std::holds_alternative<sfFDN::AttenuationFilterBankOptions>(processor);
+        });
+    if (has_legacy_attenuation)
+    {
+        throw std::invalid_argument(
+            "AttenuationFilterBankOptions must use attenuation_filter_bank_config, not loop_filter_configs.");
+    }
+}
+
 FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
                    std::span<const OptimizationParamType> param_types, GradientMethod gradient_method)
     : initial_config_(std::move(initial_config))
@@ -417,6 +417,7 @@ FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
     , param_types_(param_types.begin(), param_types.end())
     , gradient_method_(gradient_method)
 {
+    ValidateAttenuationFilterConfiguration(initial_config_);
     const uint32_t fdn_order = initial_config_.fdn_size;
 
     early_fir_.clear();
@@ -449,7 +450,7 @@ FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
             filter_config.sample_rate = initial_config_.sample_rate;
             attenuation_filter_bank_config.filter_configs.emplace_back(filter_config);
         }
-        initial_config_.attenuation_filter_bank_config = attenuation_filter_bank_config;
+        initial_config_.attenuation_filter_bank_config = std::move(attenuation_filter_bank_config);
         initial_config_.tone_correction_filters.clear();
     }
 
@@ -534,19 +535,16 @@ std::vector<float> FDNModel::GenerateIR(const arma::mat& params) const
     std::ranges::fill(impulse_buffer, 0.0f);
     std::ranges::fill(response_buffer, 0.0f);
 
-    if (early_fir_.empty())
-    {
-        impulse_buffer[0] = 1.0f; // Delta impulse
-    }
-    else
-    {
-        std::copy(early_fir_.begin(), early_fir_.end(), impulse_buffer.begin());
-    }
+    impulse_buffer[0] = 1.0f;
 
     sfFDN::AudioBuffer in_buffer(ir_size_, 1, impulse_buffer);
     sfFDN::AudioBuffer out_buffer(ir_size_, 1, response_buffer);
     auto fdn = sfFDN::CreateFDNFromConfig(GetFDNConfig(params));
     fdn->Process(in_buffer, out_buffer);
+
+    const size_t copy_size = std::min(response_buffer.size(), early_fir_.size());
+    for (size_t index = 0; index < copy_size; ++index)
+        response_buffer[index] += early_fir_[index];
 
     VectorPool::Instance().ReturnVector(std::move(impulse_buffer));
 
@@ -586,6 +584,7 @@ double FDNModel::Evaluate(const arma::mat& params, const size_t i, const size_t 
 double FDNModel::EvaluateWithGradient(const arma::mat& x, arma::mat& g)
 {
     double loss = Evaluate(x);
+    const auto current_losses = LossRegistry::Instance().GetLosses();
     switch (gradient_method_)
     {
     case GradientMethod::CentralDifferences:
@@ -597,6 +596,7 @@ double FDNModel::EvaluateWithGradient(const arma::mat& x, arma::mat& g)
     default:
         throw std::runtime_error("Unknown GradientMethod in EvaluateWithGradient");
     }
+    LossRegistry::Instance().RegisterLoss(current_losses);
 
     return loss;
 }

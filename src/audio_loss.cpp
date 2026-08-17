@@ -89,15 +89,16 @@ float L1Loss(const Eigen::ArrayBase<Derived>& signal, const Eigen::ArrayBase<Der
 
 namespace fdn_optimization
 {
-SpectralFlatnessLoss::SpectralFlatnessLoss(float target, float weight)
+SpectralFlatnessLoss::SpectralFlatnessLoss(float target, float weight, uint32_t fft_size)
     : AudioLoss("SpectralFlatness", weight)
     , target_(target)
+    , fft_size_(fft_size)
 {
 }
 
 float SpectralFlatnessLoss::ComputeLoss(std::span<const float> signal) const
 {
-    uint32_t fft_size = signal.size();
+    const uint32_t fft_size = fft_size_ > 0 ? fft_size_ : static_cast<uint32_t>(signal.size());
     auto fft_ptr = BorrowFFTForSize(fft_size);
 
     constexpr audio_utils::ForwardFFTOptions fft_options{
@@ -116,13 +117,17 @@ float SpectralFlatnessLoss::ComputeLoss(std::span<const float> signal) const
     return std::abs(target_ - flatness) * weight_;
 }
 
-TimeDomainSparsityLoss::TimeDomainSparsityLoss(float weight)
+TimeDomainSparsityLoss::TimeDomainSparsityLoss(float weight, size_t max_samples)
     : AudioLoss("TimeDomainSparsity", weight)
+    , max_samples_(max_samples)
 {
 }
 
 float TimeDomainSparsityLoss::ComputeLoss(std::span<const float> signal) const
 {
+    if (max_samples_ > 0 && signal.size() > max_samples_)
+        signal = signal.first(max_samples_);
+
     float l1_norm = 0.0f;
     float l2_norm = 0.0f;
     for (const auto& sample : signal)
@@ -132,6 +137,8 @@ float TimeDomainSparsityLoss::ComputeLoss(std::span<const float> signal) const
     }
 
     l2_norm = std::sqrt(l2_norm);
+    if (l1_norm == 0.0f)
+        throw std::domain_error("Sparsity loss window contains no non-zero samples.");
     return (l2_norm / l1_norm) * weight_;
 }
 
@@ -209,19 +216,21 @@ float WeightedEDRLoss::ComputeLoss(std::span<const float> signal) const
     float error = 0.0f;
     for (auto bin = 0; bin < edr_result.num_bins; ++bin)
     {
-        float start_db = target_mat(bin, 0);
-        const float end_db = start_db - min_db_;
+        const float start_db = target_mat(bin, 0);
+        const float end_db = start_db + min_db_;
 
         size_t end_idx = edr_result.num_frames - 1;
-
-        auto end_db_idx = (target_mat.row(bin) <= end_db).template cast<int>();
-        if (!end_db_idx.any())
+        for (size_t frame = 0; frame < edr_result.num_frames; ++frame)
         {
-            end_idx = edr_result.num_frames - 1;
+            if (target_mat(bin, frame) <= end_db)
+            {
+                end_idx = std::max<size_t>(1, frame);
+                break;
+            }
         }
 
-        error +=
-            L1Loss(edr_mat.row(bin).head(end_idx), target_mat.row(bin).head(end_idx), ReductionType::NormalizedMean);
+        error += L1Loss(edr_mat.row(bin).head(end_idx + 1), target_mat.row(bin).head(end_idx + 1),
+                        ReductionType::NormalizedMean);
     }
     return error * weight_;
 }
