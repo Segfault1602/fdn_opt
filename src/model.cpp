@@ -138,7 +138,7 @@ arma::mat ParamToHouseholderMatrix(sfFDN::FDNConfig& config, const arma::mat& pa
     config.feedback_matrix_config = sfFDN::ScalarFeedbackMatrixOptions{
         .matrix_size = fdn_order, .type = sfFDN::ScalarMatrixType::Random, .custom_matrix = std::move(matrix_coeffs)};
 
-    const size_t start_offset = fdn_order * fdn_order;
+    const size_t start_offset = fdn_order;
     if (params.n_cols <= start_offset)
     {
         return arma::mat(0, 0); // empty
