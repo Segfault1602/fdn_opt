@@ -2,6 +2,7 @@ add_library(fdn_optimization STATIC)
 target_sources(
   fdn_optimization
   PRIVATE optimizer.cpp
+          optimizer_internal.h
           model.cpp
           audio_loss.cpp
           random_searcher.cpp

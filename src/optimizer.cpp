@@ -2,6 +2,7 @@
 
 #include "audio_loss.h"
 #include "model.h"
+#include "optimizer_internal.h"
 #include "random_searcher.h"
 #include <audio_utils/audio_analysis.h>
 
@@ -232,7 +233,9 @@ struct OptimizationVisitor
         {
             optimizer.Optimize(model, params, store_best, *optim_callback);
         }
-        params = store_best.BestCoordinates();
+        const double final_objective = model.Evaluate(params);
+        if (detail::ShouldUseStoredBest(store_best.BestCoordinates(), store_best.BestObjective(), final_objective))
+            params = store_best.BestCoordinates();
     }
 
     void operator()(AdamParameters& adam_params)
@@ -412,42 +415,45 @@ void FDNOptimizer::SetLossFunctions(std::span<std::shared_ptr<AudioLoss>> loss_f
 
 void FDNOptimizer::StartOptimization(OptimizationInfo& info)
 {
-    auto current_status = status_.load();
-    if (current_status == OptimizationStatus::Running || current_status == OptimizationStatus::StartRequested)
-    {
-        LOG_WARNING(logger_, "Optimization is already running.");
-        return; // Already running
-    }
-
     LOG_INFO(logger_, "Optimizing for: ");
     for (auto p : info.parameters_to_optimize)
     {
         LOG_INFO(logger_, "  - {}", OptimizationParamTypeToString(p));
     }
 
-    SetStatus(OptimizationStatus::StartRequested);
-
-    // Copy the OptimizationInfo to send to the thread
     OptimizationInfo info_copy = info;
 
     LOG_INFO(logger_, "Starting optimization.");
-    start_time_ = std::chrono::steady_clock::now();
-    thread_ = std::jthread([this, info_copy](std::stop_token st) {
-        try
+    {
+        std::scoped_lock lock(mutex_);
+        const auto current_status = status_.load();
+        if (current_status == OptimizationStatus::Running || current_status == OptimizationStatus::StartRequested ||
+            current_status == OptimizationStatus::CancelRequested)
         {
-            ThreadProc(st, info_copy);
+            LOG_WARNING(logger_, "Optimization is already running.");
+            return;
         }
-        catch (const std::exception& error)
-        {
-            LOG_ERROR(logger_, "Optimization failed: {}", error.what());
-            SetStatus(OptimizationStatus::Failed);
-        }
-        catch (...)
-        {
-            LOG_ERROR(logger_, "Optimization failed with an unknown exception.");
-            SetStatus(OptimizationStatus::Failed);
-        }
-    });
+
+        status_.store(OptimizationStatus::StartRequested);
+        start_time_ = std::chrono::steady_clock::now();
+        thread_ = std::jthread([this, info_copy](std::stop_token st) {
+            try
+            {
+                ThreadProc(st, info_copy);
+            }
+            catch (const std::exception& error)
+            {
+                LOG_ERROR(logger_, "Optimization failed: {}", error.what());
+                SetStatus(OptimizationStatus::Failed);
+            }
+            catch (...)
+            {
+                LOG_ERROR(logger_, "Optimization failed with an unknown exception.");
+                SetStatus(OptimizationStatus::Failed);
+            }
+        });
+    }
+    status_cv_.notify_all();
 }
 
 void FDNOptimizer::CancelOptimization()
@@ -470,16 +476,25 @@ void FDNOptimizer::CancelOptimization()
 
 void FDNOptimizer::ResetStatus()
 {
-    const auto current_status = status_.load();
-    if (current_status == OptimizationStatus::Running || current_status == OptimizationStatus::StartRequested ||
-        current_status == OptimizationStatus::CancelRequested)
+    bool cancel_active_optimization = false;
     {
-        LOG_WARNING(logger_, "Cannot reset status while optimization is running. Cancelling first.");
-        if (current_status != OptimizationStatus::CancelRequested)
-            CancelOptimization();
-        thread_.join();
+        std::scoped_lock lock(mutex_);
+        const auto current_status = status_.load();
+        cancel_active_optimization =
+            current_status == OptimizationStatus::Running || current_status == OptimizationStatus::StartRequested ||
+            current_status == OptimizationStatus::CancelRequested;
+        if (cancel_active_optimization)
+            status_.store(OptimizationStatus::CancelRequested);
     }
 
+    if (cancel_active_optimization)
+    {
+        LOG_WARNING(logger_, "Cannot reset status while optimization is running. Cancelling first.");
+        status_cv_.notify_all();
+        thread_.request_stop();
+        if (thread_.joinable())
+            thread_.join();
+    }
     SetStatus(OptimizationStatus::Ready);
 }
 
