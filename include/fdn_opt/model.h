@@ -8,6 +8,7 @@
 #include "optim_types.h"
 #include "sffdn/types.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -64,6 +65,11 @@ class FDNModel
         gradient_delta_ = delta;
     }
 
+    void SetGradientThreads(uint32_t thread_count)
+    {
+        gradient_threads_ = std::max(1u, thread_count);
+    }
+
     void SetEarlyFir(std::span<const float> early_fir)
     {
         early_fir_.assign(early_fir.begin(), early_fir.end());
@@ -115,6 +121,7 @@ class FDNModel
     std::vector<float> t60_estimates_;
 
     double gradient_delta_ = 1e-3;
+    uint32_t gradient_threads_ = 1;
 
     GradientMethod gradient_method_ = GradientMethod::CentralDifferences;
     std::vector<float> early_fir_;

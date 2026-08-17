@@ -5,14 +5,36 @@
 #include <armadillo>
 #include <sffdn/sffdn.h>
 
+#include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <exception>
 #include <iostream>
 #include <utility>
 
 namespace
 {
 constexpr uint32_t kNBands = 10;
+
+class LossRegistryRestore
+{
+  public:
+    explicit LossRegistryRestore(const std::vector<double>& losses)
+        : losses_(losses)
+    {
+    }
+
+    ~LossRegistryRestore()
+    {
+        fdn_optimization::LossRegistry::Instance().RegisterLoss(losses_);
+    }
+
+    LossRegistryRestore(const LossRegistryRestore&) = delete;
+    LossRegistryRestore& operator=(const LossRegistryRestore&) = delete;
+
+  private:
+    const std::vector<double>& losses_;
+};
 
 // double Sigmoid(double x)
 // {
@@ -585,6 +607,7 @@ double FDNModel::EvaluateWithGradient(const arma::mat& x, arma::mat& g)
 {
     double loss = Evaluate(x);
     const auto current_losses = LossRegistry::Instance().GetLosses();
+    const LossRegistryRestore restore_losses(current_losses);
     switch (gradient_method_)
     {
     case GradientMethod::CentralDifferences:
@@ -596,7 +619,6 @@ double FDNModel::EvaluateWithGradient(const arma::mat& x, arma::mat& g)
     default:
         throw std::runtime_error("Unknown GradientMethod in EvaluateWithGradient");
     }
-    LossRegistry::Instance().RegisterLoss(current_losses);
 
     return loss;
 }
@@ -699,33 +721,67 @@ std::string FDNModel::PrintFDNConfig(const arma::mat& params) const
 void FDNModel::GradientCentralDifferences(const arma::mat& x, arma::mat& g)
 {
     g.zeros(x.n_rows, x.n_cols);
+    std::atomic<bool> exception_recorded = false;
+    std::exception_ptr exception;
 
-#pragma omp parallel for
+#pragma omp parallel for if (gradient_threads_ > 1) num_threads(gradient_threads_) schedule(static)
     for (int col = 0; col < static_cast<int>(x.n_cols); ++col)
     {
-        arma::mat x_plus = x;
-        x_plus(0, col) += gradient_delta_;
-        double plus_value = Evaluate(x_plus);
+        if (exception_recorded.load(std::memory_order_relaxed))
+            continue;
 
-        arma::mat x_minus = x;
-        x_minus(0, col) -= gradient_delta_;
-        double minus_value = Evaluate(x_minus);
-        g(0, col) = (plus_value - minus_value) / (2 * gradient_delta_);
+        try
+        {
+            arma::mat x_plus = x;
+            x_plus(0, col) += gradient_delta_;
+            const double plus_value = Evaluate(x_plus);
+
+            arma::mat x_minus = x;
+            x_minus(0, col) -= gradient_delta_;
+            const double minus_value = Evaluate(x_minus);
+            g(0, col) = (plus_value - minus_value) / (2 * gradient_delta_);
+        }
+        catch (...)
+        {
+            bool expected = false;
+            if (exception_recorded.compare_exchange_strong(expected, true, std::memory_order_relaxed))
+                exception = std::current_exception();
+        }
     }
+
+    if (exception)
+        std::rethrow_exception(exception);
 }
 
 void FDNModel::GradientForwardDifferences(const arma::mat& x, arma::mat& g, double current_loss)
 {
     g.zeros(x.n_rows, x.n_cols);
-#pragma omp parallel for
+    std::atomic<bool> exception_recorded = false;
+    std::exception_ptr exception;
+
+#pragma omp parallel for if (gradient_threads_ > 1) num_threads(gradient_threads_) schedule(static)
     for (int col = 0; col < static_cast<int>(x.n_cols); ++col)
     {
-        arma::mat x_plus = x;
-        x_plus(0, col) += gradient_delta_;
-        // Creating a whole new model to avoid threading issues
-        double plus_value = Evaluate(x_plus);
-        g(0, col) = (plus_value - current_loss) / gradient_delta_;
+        if (exception_recorded.load(std::memory_order_relaxed))
+            continue;
+
+        try
+        {
+            arma::mat x_plus = x;
+            x_plus(0, col) += gradient_delta_;
+            const double plus_value = Evaluate(x_plus);
+            g(0, col) = (plus_value - current_loss) / gradient_delta_;
+        }
+        catch (...)
+        {
+            bool expected = false;
+            if (exception_recorded.compare_exchange_strong(expected, true, std::memory_order_relaxed))
+                exception = std::current_exception();
+        }
     }
+
+    if (exception)
+        std::rethrow_exception(exception);
 }
 
 } // namespace fdn_optimization

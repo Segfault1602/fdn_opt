@@ -15,8 +15,6 @@
 #include <quill/Frontend.h>
 #include <quill/LogMacros.h>
 
-#include <omp.h>
-
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -172,7 +170,7 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                        const sfFDN::FDNConfig& initial_fdn_config,
                                                        const fdn_optimization::OptimizationAlgoParams& optimizer_params,
                                                        const std::tuple<double, double, double>& loss_weights,
-                                                       bool verbose)
+                                                       uint32_t gradient_threads, bool verbose)
 {
 
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::Gains,
@@ -205,7 +203,8 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
                                                 .target_rir = {},
                                                 .early_fir = {},
-                                                .optimizer_params = optimizer_params};
+                                                .optimizer_params = optimizer_params,
+                                                .gradient_threads = gradient_threads};
 
     fdn_optimization::FDNOptimizer optimizer(logger, verbose);
 
@@ -224,7 +223,7 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
                                                       const std::vector<float>& target_rir,
                                                       const std::vector<float>& early_fir,
                                                       const std::tuple<double, double, double>& loss_weights,
-                                                      bool verbose)
+                                                      uint32_t gradient_threads, bool verbose)
 {
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::AttenuationFilters,
                                       fdn_optimization::OptimizationParamType::TonecorrectionFilters,
@@ -236,7 +235,8 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
                                                 .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
                                                 .target_rir = target_rir,
                                                 .early_fir = early_fir,
-                                                .optimizer_params = optimizer_params};
+                                                .optimizer_params = optimizer_params,
+                                                .gradient_threads = gradient_threads};
 
     fdn_optimization::FDNOptimizer optimizer(logger, verbose);
 
@@ -334,7 +334,6 @@ void RenderAudio(const sfFDN::FDNConfig& fdn_config, const std::string& input_fi
 
 int main(int argc, char** argv)
 {
-    omp_set_num_threads(1);
     quill::Backend::start();
     quill::Logger* logger = quill::Frontend::create_or_get_logger(
         "root", quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
@@ -359,6 +358,11 @@ int main(int argc, char** argv)
 
     bool verbose = false;
     app.add_flag("-v,--verbose", verbose, "Enable verbose logging");
+
+    uint32_t gradient_threads = fdn_optimization::DefaultGradientThreadCount();
+    app.add_option("--gradient_threads", gradient_threads, "Threads used for finite-difference gradients")
+        ->check(CLI::PositiveNumber)
+        ->capture_default_str();
 
     double spectral_flatness_weight = 1.0;
     app.add_option("--spectral_flatness_weight", spectral_flatness_weight, "Weight for spectral flatness loss term")
@@ -533,12 +537,7 @@ int main(int argc, char** argv)
         logger->set_log_level(quill::LogLevel::Debug);
     }
 
-    auto omp_num_threads = omp_get_max_threads();
-#ifdef __APPLE__
-    omp_set_num_threads(std::min(4, omp_num_threads));
-    omp_num_threads = omp_get_max_threads();
-#endif
-    LOG_INFO(logger, "Using up to {} threads for optimization.", omp_num_threads);
+    LOG_INFO(logger, "Using {} threads for finite-difference gradients.", gradient_threads);
 
     auto config_filename = app.get_config_ptr()->as<std::string>();
     LOG_INFO(logger, "Using configuration file: {}", config_filename);
@@ -582,7 +581,8 @@ int main(int argc, char** argv)
     {
         result =
             OptimizeColorless(logger, initial_fdn_config, optimizer_params,
-                              std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight), verbose);
+                              std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight),
+                              gradient_threads, verbose);
     }
     catch (const std::exception& error)
     {
@@ -666,7 +666,8 @@ int main(int argc, char** argv)
     try
     {
         result = OptimizeSpectrum(logger, initial_fdn_config, optimizer_params, target_rir, early_fir,
-                                  std::make_tuple(edc_weight, mel_edr_weight, weighted_edr_weight), verbose);
+                                  std::make_tuple(edc_weight, mel_edr_weight, weighted_edr_weight), gradient_threads,
+                                  verbose);
     }
     catch (const std::exception& error)
     {

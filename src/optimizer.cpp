@@ -568,6 +568,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     }
 
     FDNModel model(info.initial_fdn_config, info.ir_size, info.parameters_to_optimize, info.gradient_method);
+    model.SetGradientThreads(info.gradient_threads);
 
     double gradient_delta = std::visit(
         [](auto&& params) -> double {
@@ -599,11 +600,13 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     model.SetLossFunctions(loss_functions_);
 
     arma::mat params = model.GetInitialParams();
-    std::string initial_config_str = model.PrintFDNConfig(params);
-    LOG_INFO(logger_, "Initial config: {}", initial_config_str);
-    std::stringstream param_stream;
-    param_stream << params;
-    LOG_INFO(logger_, "Initial parameters: {}", param_stream.str());
+    if (verbose_)
+    {
+        LOG_INFO(logger_, "Initial config: {}", model.PrintFDNConfig(params));
+        std::stringstream param_stream;
+        param_stream << params;
+        LOG_INFO(logger_, "Initial parameters: {}", param_stream.str());
+    }
 
     auto initial_loss = model.Evaluate(params);
     if (!std::isfinite(initial_loss))
@@ -629,11 +632,13 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     if (!std::isfinite(final_loss))
         throw std::runtime_error("Final objective is not finite.");
     LOG_INFO(logger_, "Final loss: {}", final_loss);
-    std::string final_config_str = model.PrintFDNConfig(params);
-    LOG_INFO(logger_, "Final config:\n{}", final_config_str);
-    param_stream.str("");
-    param_stream << params;
-    LOG_INFO(logger_, "Optimization finished. Final parameters: {}", param_stream.str());
+    if (verbose_)
+    {
+        LOG_INFO(logger_, "Final config:\n{}", model.PrintFDNConfig(params));
+        std::stringstream param_stream;
+        param_stream << params;
+        LOG_INFO(logger_, "Optimization finished. Final parameters: {}", param_stream.str());
+    }
 
     {
         std::scoped_lock lock(mutex_);

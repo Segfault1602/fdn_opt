@@ -1,10 +1,18 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
+#include <thread>
 
 namespace fdn_optimization
 {
+inline uint32_t DefaultGradientThreadCount()
+{
+    const uint32_t hardware_threads = std::thread::hardware_concurrency();
+    return hardware_threads == 0 ? 1 : std::min(4u, hardware_threads);
+}
+
 enum class OptimizationParamType : uint8_t
 {
     Gains,

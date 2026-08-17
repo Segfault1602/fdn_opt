@@ -199,6 +199,7 @@ struct OptimizationInfo
     std::vector<float> early_fir;
 
     OptimizationAlgoParams optimizer_params;
+    uint32_t gradient_threads = DefaultGradientThreadCount();
 };
 
 struct OptimizationProgressInfo
