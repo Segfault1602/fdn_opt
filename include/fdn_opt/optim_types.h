@@ -55,4 +55,44 @@ enum class GradientMethod : uint8_t
     CentralDifferences,
     ForwardDifferences,
 };
+
+// Controls whether the early FIR is added directly or used to excite the FDN.
+enum class EarlyFirMode : uint8_t
+{
+    // Filter the signal entering the FDN; retained for legacy comparisons.
+    Excitation,
+    // Add the early FIR alongside the FDN late-reverberation output.
+    DirectPath,
+};
+
+// Defines how unconstrained optimizer coordinates map to physical matching parameters.
+enum class MatchingParameterization : uint8_t
+{
+    // Optimize physical values directly and clamp them to valid bounds.
+    RawClamped,
+    // Map unconstrained coordinates smoothly to bounded physical values.
+    ScaledSmooth,
+};
+
+// Selects the initial matching coordinates before optimization.
+enum class MatchingInitialization : uint8_t
+{
+    // Initialize reproducibly from the configured random seed.
+    SeededRandom,
+    // Initialize RT60 to one second and correction gains to zero.
+    Neutral,
+    // Initialize RT60 from decay estimates measured from the target RIR.
+    TargetDerived,
+};
+
+// Bounds and scaling used when converting matching coordinates to an FDN config.
+struct MatchingParameterConfig
+{
+    MatchingParameterization parameterization = MatchingParameterization::ScaledSmooth;
+    MatchingInitialization initialization = MatchingInitialization::Neutral;
+    double minimum_t60 = 0.1;
+    double maximum_t60 = 20.0;
+    double tone_gain_scale_db = 12.0;
+    bool zero_mean_tone_gains = true;
+};
 } // namespace fdn_optimization

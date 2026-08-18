@@ -231,6 +231,28 @@ inline void WriteConfigToFile(const sfFDN::FDNConfig& config, const std::filesys
     file << j.dump(4);
 }
 
+inline std::optional<sfFDN::FDNConfig> ReadConfigFromFile(const std::filesystem::path& filename, quill::Logger* logger)
+{
+    std::ifstream file(filename);
+    if (!file.is_open())
+    {
+        LOG_ERROR(logger, "Failed to open file {} for reading FDNConfig.", filename.string());
+        return std::nullopt;
+    }
+
+    try
+    {
+        nlohmann::json json;
+        file >> json;
+        return json.get<sfFDN::FDNConfig>();
+    }
+    catch (const std::exception& error)
+    {
+        LOG_ERROR(logger, "Failed to parse FDNConfig from {}: {}", filename.string(), error.what());
+        return std::nullopt;
+    }
+}
+
 inline void WriteInfoToFile(const fdn_optimization::OptimizationResult& result,
                             const fdn_optimization::OptimizationAlgoParams& optimizer_params,
                             const std::filesystem::path& filename, quill::Logger* logger)
@@ -370,9 +392,10 @@ inline void WriteFilterConfigToFile(const sfFDN::FDNConfig& config, const std::f
     file << j.dump(4); // Pretty print with 4 spaces indentation
 }
 
-inline void SaveImpulseResponse(const sfFDN::FDNConfig& config, uint32_t ir_length,
-                                const std::filesystem::path& filename, quill::Logger* logger,
-                                const std::vector<float>& early_fir = {})
+inline void SaveImpulseResponse(
+    const sfFDN::FDNConfig& config, uint32_t ir_length, const std::filesystem::path& filename, quill::Logger* logger,
+    const std::vector<float>& early_fir = {},
+    fdn_optimization::EarlyFirMode early_fir_mode = fdn_optimization::EarlyFirMode::DirectPath)
 {
     auto config_copy = config;
     // config_copy.attenuation_t60s = {1.f};
@@ -382,7 +405,10 @@ inline void SaveImpulseResponse(const sfFDN::FDNConfig& config, uint32_t ir_leng
 
     std::vector<float> input_data(ir_length, 0.0f);
 
-    input_data[0] = 1.0f;
+    if (early_fir.empty() || early_fir_mode == fdn_optimization::EarlyFirMode::DirectPath)
+        input_data[0] = 1.0f;
+    else
+        std::copy_n(early_fir.begin(), std::min(input_data.size(), early_fir.size()), input_data.begin());
 
     std::vector<float> impulse_response(ir_length, 0.0f);
     sfFDN::AudioBuffer impulse_buffer(impulse_response);
@@ -390,9 +416,12 @@ inline void SaveImpulseResponse(const sfFDN::FDNConfig& config, uint32_t ir_leng
     sfFDN::AudioBuffer in_buffer(input_data);
     fdn->Process(in_buffer, impulse_buffer);
 
-    const size_t copy_size = std::min(impulse_response.size(), early_fir.size());
-    for (size_t index = 0; index < copy_size; ++index)
-        impulse_response[index] += early_fir[index];
+    if (!early_fir.empty() && early_fir_mode == fdn_optimization::EarlyFirMode::DirectPath)
+    {
+        const size_t copy_size = std::min(impulse_response.size(), early_fir.size());
+        for (size_t index = 0; index < copy_size; ++index)
+            impulse_response[index] += early_fir[index];
+    }
 
     LOG_INFO(logger, "Writing impulse response to file: {}", filename.string());
     audio_utils::audio_file::WriteWavFile(filename.string(), impulse_response, kSampleRate);

@@ -19,6 +19,7 @@ namespace fdn_optimization
 {
 
 void ValidateAttenuationFilterConfiguration(const sfFDN::FDNConfig& config);
+void ValidateFDNConfigurationForOptimization(const sfFDN::FDNConfig& config);
 
 class LossRegistry
 {
@@ -50,7 +51,8 @@ class FDNModel
 {
   public:
     FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size, std::span<const OptimizationParamType> param_types,
-             GradientMethod gradient_method = GradientMethod::CentralDifferences);
+             GradientMethod gradient_method = GradientMethod::CentralDifferences,
+             MatchingParameterConfig matching_parameters = {});
 
     void SetLossFunctions(const std::vector<std::shared_ptr<AudioLoss>>& loss_functions);
 
@@ -76,9 +78,10 @@ class FDNModel
         return evaluation_count_->load();
     }
 
-    void SetEarlyFir(std::span<const float> early_fir)
+    void SetEarlyFir(std::span<const float> early_fir, EarlyFirMode mode)
     {
         early_fir_.assign(early_fir.begin(), early_fir.end());
+        early_fir_mode_ = mode;
     }
 
     void SetT60Estimates(std::span<const float> t60_estimates);
@@ -132,8 +135,10 @@ class FDNModel
 
     GradientMethod gradient_method_ = GradientMethod::CentralDifferences;
     std::vector<float> early_fir_;
+    EarlyFirMode early_fir_mode_ = EarlyFirMode::DirectPath;
 
     std::optional<sfFDN::AttenuationFilterBankOptions> initial_attenuation_filter_bank_config_;
+    MatchingParameterConfig matching_parameters_;
 
     void GradientCentralDifferences(const arma::mat& x, arma::mat& g);
     void GradientForwardDifferences(const arma::mat& x, arma::mat& g, double current_loss);

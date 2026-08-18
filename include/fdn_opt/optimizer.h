@@ -198,6 +198,8 @@ struct OptimizationInfo
 
     std::vector<float> target_rir;
     std::vector<float> early_fir;
+    std::vector<float> t60_estimates;
+    EarlyFirMode early_fir_mode = EarlyFirMode::DirectPath;
 
     OptimizationAlgoParams optimizer_params;
     uint32_t seed = 0;
@@ -206,6 +208,7 @@ struct OptimizationInfo
     double max_time_seconds = 0.0;
     uint64_t max_objective_evaluations = 0;
     bool record_trajectory = false;
+    MatchingParameterConfig matching_parameters;
 };
 
 struct OptimizationStepInfo

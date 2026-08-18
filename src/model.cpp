@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -36,10 +37,32 @@ class LossRegistryRestore
     const std::vector<double>& losses_;
 };
 
-// double Sigmoid(double x)
-// {
-//     return 1.0 / (1.0 + std::exp(-x));
-// }
+double Sigmoid(double value)
+{
+    if (value >= 0.0)
+    {
+        const double exponential = std::exp(-value);
+        return 1.0 / (1.0 + exponential);
+    }
+    const double exponential = std::exp(value);
+    return exponential / (1.0 + exponential);
+}
+
+double MapToT60(double parameter, const fdn_optimization::MatchingParameterConfig& config)
+{
+    if (config.parameterization == fdn_optimization::MatchingParameterization::RawClamped)
+        return std::clamp(std::abs(parameter), config.minimum_t60, config.maximum_t60);
+    return config.minimum_t60 + (config.maximum_t60 - config.minimum_t60) * Sigmoid(parameter);
+}
+
+double MapFromT60(double t60, const fdn_optimization::MatchingParameterConfig& config)
+{
+    const double clamped = std::clamp(t60, config.minimum_t60 + 1e-6, config.maximum_t60 - 1e-6);
+    if (config.parameterization == fdn_optimization::MatchingParameterization::RawClamped)
+        return clamped;
+    const double normalized = (clamped - config.minimum_t60) / (config.maximum_t60 - config.minimum_t60);
+    return std::log(normalized / (1.0 - normalized));
+}
 
 arma::mat ParamToGain(const arma::mat& params)
 {
@@ -182,14 +205,10 @@ arma::mat ParamToCirculantMatrix(sfFDN::FDNConfig& config, const arma::mat& para
     return leftover_params;
 }
 
-arma::mat ParamsToAttenuationFilters_10Bands(sfFDN::FDNConfig& config, const arma::mat& params)
+arma::mat ParamsToAttenuationFilters_10Bands(sfFDN::FDNConfig& config, const arma::mat& params,
+                                             const fdn_optimization::MatchingParameterConfig& parameter_config)
 {
     assert(params.n_cols >= kNBands);
-
-    arma::mat t60s = params.cols(0, kNBands - 1);
-
-    t60s = arma::abs(t60s);
-    t60s = arma::clamp(t60s, 0.1, 20.0);
 
     sfFDN::TenBandFilterOptions attenuation_config;
     attenuation_config.sample_rate = config.sample_rate;
@@ -197,7 +216,7 @@ arma::mat ParamsToAttenuationFilters_10Bands(sfFDN::FDNConfig& config, const arm
 
     for (uint32_t i = 0; i < attenuation_config.t60s.size(); ++i)
     {
-        attenuation_config.t60s[i] = static_cast<float>(t60s(0, i));
+        attenuation_config.t60s[i] = static_cast<float>(MapToT60(params(0, i), parameter_config));
     }
 
     sfFDN::AttenuationFilterBankOptions filter_bank_config;
@@ -219,12 +238,11 @@ arma::mat ParamsToAttenuationFilters_10Bands(sfFDN::FDNConfig& config, const arm
     return leftover_params;
 }
 
-arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig& config, const arma::mat& params)
+arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig& config, const arma::mat& params,
+                                           const fdn_optimization::MatchingParameterConfig& parameter_config)
 {
     const size_t kParamCount = 3 * config.fdn_size; // 3 for the bands, per channel
     assert(params.n_cols >= kParamCount);
-
-    arma::mat t60 = params.cols(0, kParamCount - 1);
 
     sfFDN::ThreeBandFilterOptions attenuation_config;
     attenuation_config.freqs = {800.f, 8000.f};
@@ -235,15 +253,13 @@ arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig& config, const arma:
 
     filter_bank_config.filter_configs.clear();
 
-    t60 = arma::abs(t60);
-    t60 = arma::clamp(t60, 0.1, 20.0);
     for (auto n = 0u; n < config.fdn_size; ++n)
     {
         sfFDN::ThreeBandFilterOptions filter_config_copy = attenuation_config;
         filter_config_copy.delay = config.delay_bank_config.delays[n];
-        filter_config_copy.t60s[0] = static_cast<float>(t60(0, n * 3 + 0));
-        filter_config_copy.t60s[1] = static_cast<float>(t60(0, n * 3 + 1));
-        filter_config_copy.t60s[2] = static_cast<float>(t60(0, n * 3 + 2));
+        filter_config_copy.t60s[0] = static_cast<float>(MapToT60(params(0, n * 3 + 0), parameter_config));
+        filter_config_copy.t60s[1] = static_cast<float>(MapToT60(params(0, n * 3 + 1), parameter_config));
+        filter_config_copy.t60s[2] = static_cast<float>(MapToT60(params(0, n * 3 + 2), parameter_config));
         filter_bank_config.filter_configs.emplace_back(filter_config_copy);
     }
 
@@ -259,11 +275,18 @@ arma::mat ParamsToAttenuationFilters_3Band(sfFDN::FDNConfig& config, const arma:
     return leftover_params;
 }
 
-arma::mat ParamsToTonecorrectionFilters(sfFDN::FDNConfig& config, const arma::mat& params)
+arma::mat ParamsToTonecorrectionFilters(sfFDN::FDNConfig& config, const arma::mat& params,
+                                        const fdn_optimization::MatchingParameterConfig& parameter_config)
 {
     assert(params.n_cols >= kNBands);
 
     arma::mat gains = params.cols(0, kNBands - 1);
+    if (parameter_config.parameterization == fdn_optimization::MatchingParameterization::ScaledSmooth)
+    {
+        gains *= parameter_config.tone_gain_scale_db;
+        if (parameter_config.zero_mean_tone_gains)
+            gains -= arma::mean(arma::vectorise(gains));
+    }
 
     sfFDN::GraphicEQOptions* eq_config = nullptr;
     for (auto& filter : config.tone_correction_filters)
@@ -300,11 +323,14 @@ arma::mat ParamsToTonecorrectionFilters(sfFDN::FDNConfig& config, const arma::ma
     return leftover_params;
 }
 
-arma::mat ParamsToOverallGain(sfFDN::FDNConfig& config, const arma::mat& params)
+arma::mat ParamsToOverallGain(sfFDN::FDNConfig& config, const arma::mat& params,
+                              const fdn_optimization::MatchingParameterConfig& parameter_config)
 {
     assert(params.n_cols >= 1);
 
     arma::mat gains = params.cols(0, 0);
+    if (parameter_config.parameterization == fdn_optimization::MatchingParameterization::ScaledSmooth)
+        gains = arma::exp(gains);
 
     for (auto& g : config.output_block_config.parallel_gains_config.gains)
     {
@@ -322,7 +348,9 @@ arma::mat ParamsToOverallGain(sfFDN::FDNConfig& config, const arma::mat& params)
 }
 
 arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig& config,
-                                     std::span<const fdn_optimization::OptimizationParamType> param_types)
+                                     std::span<const fdn_optimization::OptimizationParamType> param_types,
+                                     const fdn_optimization::MatchingParameterConfig& matching_config,
+                                     std::span<const float> t60_estimates)
 {
     arma::mat params(0, 0);
 
@@ -379,32 +407,60 @@ arma::mat GetInitialParamsFromConfig(const sfFDN::FDNConfig& config,
         break;
         case fdn_optimization::OptimizationParamType::AttenuationFilters:
         {
-            arma::mat t60s(1, kNBands, arma::fill::randn);
-            t60s = arma::abs(t60s);
-            t60s = arma::clamp(t60s, 0.1, 20.0);
-
-            params = arma::join_horiz(params, t60s);
+            arma::mat t60_parameters(1, kNBands);
+            for (uint32_t band = 0; band < kNBands; ++band)
+            {
+                double initial_t60 = 1.0;
+                if (matching_config.initialization == fdn_optimization::MatchingInitialization::SeededRandom)
+                    initial_t60 =
+                        std::clamp(std::abs(arma::randn()), matching_config.minimum_t60, matching_config.maximum_t60);
+                else if (matching_config.initialization == fdn_optimization::MatchingInitialization::TargetDerived &&
+                         !t60_estimates.empty())
+                    initial_t60 = t60_estimates[std::min<size_t>(band, t60_estimates.size() - 1)];
+                t60_parameters(0, band) = MapFromT60(initial_t60, matching_config);
+            }
+            params = arma::join_horiz(params, t60_parameters);
         }
         break;
         case fdn_optimization::OptimizationParamType::AttenuationFilters_3Band:
         {
-            arma::mat p(1, 3 * fdn_order, arma::fill::randn);
-            p = arma::abs(p);
-            p = arma::clamp(p, 0.1, 20.0);
-
-            params = arma::join_horiz(params, p);
+            arma::mat t60_parameters(1, 3 * fdn_order);
+            for (uint32_t channel = 0; channel < fdn_order; ++channel)
+            {
+                for (uint32_t band = 0; band < 3; ++band)
+                {
+                    double initial_t60 = 1.0;
+                    if (matching_config.initialization == fdn_optimization::MatchingInitialization::SeededRandom)
+                        initial_t60 = std::clamp(std::abs(arma::randn()), matching_config.minimum_t60,
+                                                 matching_config.maximum_t60);
+                    else if (matching_config.initialization ==
+                                 fdn_optimization::MatchingInitialization::TargetDerived &&
+                             !t60_estimates.empty())
+                        initial_t60 = t60_estimates[std::min<size_t>(band, t60_estimates.size() - 1)];
+                    t60_parameters(0, channel * 3 + band) = MapFromT60(initial_t60, matching_config);
+                }
+            }
+            params = arma::join_horiz(params, t60_parameters);
         }
         break;
         case fdn_optimization::OptimizationParamType::TonecorrectionFilters:
         {
-            arma::mat tc_gains(1, kNBands, arma::fill::randn);
-            tc_gains *= 0.5; // start with small gains
+            arma::mat tc_gains(1, kNBands, arma::fill::zeros);
+            if (matching_config.initialization == fdn_optimization::MatchingInitialization::SeededRandom)
+                tc_gains.randn();
+            tc_gains *= 0.5;
+            if (matching_config.parameterization == fdn_optimization::MatchingParameterization::ScaledSmooth)
+                tc_gains /= matching_config.tone_gain_scale_db;
             params = arma::join_horiz(params, tc_gains);
         }
         break;
         case fdn_optimization::OptimizationParamType::OverallGain:
         {
-            arma::mat overall_gain(1, 1, arma::fill::ones);
+            arma::mat overall_gain(1, 1);
+            if (matching_config.parameterization == fdn_optimization::MatchingParameterization::ScaledSmooth)
+                overall_gain.zeros();
+            else
+                overall_gain.ones();
             params = arma::join_horiz(params, overall_gain);
         }
         break;
@@ -432,14 +488,42 @@ void ValidateAttenuationFilterConfiguration(const sfFDN::FDNConfig& config)
     }
 }
 
+void ValidateFDNConfigurationForOptimization(const sfFDN::FDNConfig& config)
+{
+    ValidateAttenuationFilterConfiguration(config);
+    if (config.fdn_size == 0)
+        throw std::invalid_argument("FDN config must contain at least one channel.");
+    if (config.delay_bank_config.delays.size() != config.fdn_size)
+        throw std::invalid_argument("FDN delay count must match fdn_size.");
+    if (config.input_block_config.parallel_gains_config.gains.size() != config.fdn_size)
+        throw std::invalid_argument("FDN input gain count must match fdn_size.");
+    if (config.output_block_config.parallel_gains_config.gains.size() != config.fdn_size)
+        throw std::invalid_argument("FDN output gain count must match fdn_size.");
+    if (config.attenuation_filter_bank_config &&
+        config.attenuation_filter_bank_config->filter_configs.size() != config.fdn_size)
+    {
+        throw std::invalid_argument("FDN attenuation filter count must match fdn_size.");
+    }
+    if (std::holds_alternative<sfFDN::ScalarFeedbackMatrixOptions>(config.feedback_matrix_config))
+    {
+        const auto& matrix = std::get<sfFDN::ScalarFeedbackMatrixOptions>(config.feedback_matrix_config);
+        if (matrix.matrix_size != config.fdn_size)
+            throw std::invalid_argument("FDN feedback matrix size must match fdn_size.");
+        if (matrix.custom_matrix && matrix.custom_matrix->size() != config.fdn_size * config.fdn_size)
+            throw std::invalid_argument("FDN custom feedback matrix must contain fdn_size squared coefficients.");
+    }
+}
+
 FDNModel::FDNModel(sfFDN::FDNConfig initial_config, uint32_t ir_size,
-                   std::span<const OptimizationParamType> param_types, GradientMethod gradient_method)
+                   std::span<const OptimizationParamType> param_types, GradientMethod gradient_method,
+                   MatchingParameterConfig matching_parameters)
     : initial_config_(std::move(initial_config))
     , ir_size_(ir_size)
     , param_types_(param_types.begin(), param_types.end())
     , gradient_method_(gradient_method)
+    , matching_parameters_(matching_parameters)
 {
-    ValidateAttenuationFilterConfiguration(initial_config_);
+    ValidateFDNConfigurationForOptimization(initial_config_);
     const uint32_t fdn_order = initial_config_.fdn_size;
 
     early_fir_.clear();
@@ -542,7 +626,7 @@ void FDNModel::SetT60Estimates(std::span<const float> t60_estimates)
 
 arma::mat FDNModel::GetInitialParams() const
 {
-    arma::mat params = GetInitialParamsFromConfig(initial_config_, param_types_);
+    arma::mat params = GetInitialParamsFromConfig(initial_config_, param_types_, matching_parameters_, t60_estimates_);
 
     assert(params.n_cols == GetParamCount());
 
@@ -557,16 +641,22 @@ std::vector<float> FDNModel::GenerateIR(const arma::mat& params) const
     std::ranges::fill(impulse_buffer, 0.0f);
     std::ranges::fill(response_buffer, 0.0f);
 
-    impulse_buffer[0] = 1.0f;
+    if (early_fir_.empty() || early_fir_mode_ == EarlyFirMode::DirectPath)
+        impulse_buffer[0] = 1.0f;
+    else
+        std::copy_n(early_fir_.begin(), std::min(impulse_buffer.size(), early_fir_.size()), impulse_buffer.begin());
 
     sfFDN::AudioBuffer in_buffer(ir_size_, 1, impulse_buffer);
     sfFDN::AudioBuffer out_buffer(ir_size_, 1, response_buffer);
     auto fdn = sfFDN::CreateFDNFromConfig(GetFDNConfig(params));
     fdn->Process(in_buffer, out_buffer);
 
-    const size_t copy_size = std::min(response_buffer.size(), early_fir_.size());
-    for (size_t index = 0; index < copy_size; ++index)
-        response_buffer[index] += early_fir_[index];
+    if (!early_fir_.empty() && early_fir_mode_ == EarlyFirMode::DirectPath)
+    {
+        const size_t copy_size = std::min(response_buffer.size(), early_fir_.size());
+        for (size_t index = 0; index < copy_size; ++index)
+            response_buffer[index] += early_fir_[index];
+    }
 
     VectorPool::Instance().ReturnVector(std::move(impulse_buffer));
 
@@ -663,22 +753,22 @@ sfFDN::FDNConfig FDNModel::GetFDNConfig(const arma::mat& params) const
         break;
         case OptimizationParamType::AttenuationFilters:
         {
-            params_to_process = ParamsToAttenuationFilters_10Bands(config, params_to_process);
+            params_to_process = ParamsToAttenuationFilters_10Bands(config, params_to_process, matching_parameters_);
         }
         break;
         case OptimizationParamType::AttenuationFilters_3Band:
         {
-            params_to_process = ParamsToAttenuationFilters_3Band(config, params_to_process);
+            params_to_process = ParamsToAttenuationFilters_3Band(config, params_to_process, matching_parameters_);
         }
         break;
         case OptimizationParamType::TonecorrectionFilters:
         {
-            params_to_process = ParamsToTonecorrectionFilters(config, params_to_process);
+            params_to_process = ParamsToTonecorrectionFilters(config, params_to_process, matching_parameters_);
         }
         break;
         case OptimizationParamType::OverallGain:
         {
-            params_to_process = ParamsToOverallGain(config, params_to_process);
+            params_to_process = ParamsToOverallGain(config, params_to_process, matching_parameters_);
         }
         break;
         default:

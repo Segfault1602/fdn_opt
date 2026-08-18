@@ -651,7 +651,8 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     }
 
     const auto setup_start = std::chrono::steady_clock::now();
-    FDNModel model(info.initial_fdn_config, info.ir_size, info.parameters_to_optimize, info.gradient_method);
+    FDNModel model(info.initial_fdn_config, info.ir_size, info.parameters_to_optimize, info.gradient_method,
+                   info.matching_parameters);
     model.SetGradientThreads(info.gradient_threads);
 
     double gradient_delta = std::visit(
@@ -670,11 +671,13 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         info.optimizer_params);
 
     model.SetGradientDelta(gradient_delta);
+    if (!info.t60_estimates.empty())
+        model.SetT60Estimates(info.t60_estimates);
 
     if (!info.early_fir.empty())
     {
         LOG_INFO(logger_, "Setting early FIR with size {}", info.early_fir.size());
-        model.SetEarlyFir(info.early_fir);
+        model.SetEarlyFir(info.early_fir, info.early_fir_mode);
     }
 
     LOG_INFO(logger_, "Gradient method: {}, Gradient delta: {}",
