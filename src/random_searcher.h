@@ -29,7 +29,7 @@ class RandomSearcher
 
         for (size_t t = 0; t < n_threads; ++t)
         {
-            threads_.emplace_back([this, &model, &stop_flag]() {
+            threads_.emplace_back([this, &model, &stop_flag, cb]() {
                 FDNModel thread_model = model;
 
                 auto local_best_params = thread_model.GetInitialParams();
@@ -41,7 +41,7 @@ class RandomSearcher
                 // arma::mat gradient;
                 // double last_objective = std::numeric_limits<double>::infinity();
                 int iteration = 0;
-                while (!stop_token_.stop_requested() && !stop_flag.load())
+                while (!stop_token_.stop_requested() && !stop_flag.load() && !cb->ShouldTerminate())
                 {
 
                     double objective = thread_model.Evaluate(params);
@@ -79,7 +79,7 @@ class RandomSearcher
         }
 
         auto start_time = std::chrono::steady_clock::now();
-        while (!stop_token_.stop_requested())
+        while (!stop_token_.stop_requested() && !cb->ShouldTerminate())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -109,6 +109,13 @@ class RandomSearcher
                 }
                 break;
             }
+        }
+
+        stop_flag.store(true);
+        for (auto& thread : threads_)
+        {
+            if (thread.joinable())
+                thread.join();
         }
 
         return;

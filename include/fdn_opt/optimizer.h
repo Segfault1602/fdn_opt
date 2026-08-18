@@ -40,6 +40,7 @@ struct AdamParameters
     int decay_step_size = 1;
     int epoch_restarts = 100;
     int max_restarts = 0;
+    size_t max_iterations = 1000000;
     float tolerance = 1e-5;
 
     double gradient_delta = 1e-2;
@@ -199,7 +200,24 @@ struct OptimizationInfo
     std::vector<float> early_fir;
 
     OptimizationAlgoParams optimizer_params;
+    uint32_t seed = 0;
     uint32_t gradient_threads = DefaultGradientThreadCount();
+    uint32_t optimizer_threads = 1;
+    double max_time_seconds = 0.0;
+    uint64_t max_objective_evaluations = 0;
+    bool record_trajectory = false;
+};
+
+struct OptimizationStepInfo
+{
+    size_t step = 0;
+    double total_loss = 0.0;
+    std::vector<double> component_losses;
+    double best_loss = 0.0;
+    double learning_rate = 0.0;
+    double gradient_norm = 0.0;
+    uint64_t objective_evaluations = 0;
+    std::chrono::duration<double> elapsed_time;
 };
 
 struct OptimizationProgressInfo
@@ -213,11 +231,21 @@ struct OptimizationResult
 {
     sfFDN::FDNConfig initial_fdn_config;
     sfFDN::FDNConfig optimized_fdn_config;
-    std::chrono::duration<double> total_time;
-    uint32_t total_evaluations;
+    std::chrono::duration<double> total_time{};
+    std::chrono::duration<double> setup_time{};
+    std::chrono::duration<double> initial_evaluation_time{};
+    std::chrono::duration<double> optimizer_time{};
+    std::chrono::duration<double> final_evaluation_time{};
+    uint32_t total_evaluations = 0;
+    uint64_t objective_evaluations = 0;
+    uint32_t gradient_threads = 1;
+    uint32_t optimizer_threads = 1;
     std::vector<std::vector<double>> loss_history;
     std::vector<std::string> loss_names;
-    double best_loss;
+    std::vector<double> final_losses;
+    std::vector<OptimizationStepInfo> trajectory;
+    double best_loss = 0.0;
+    std::string termination_reason;
 };
 
 class OptimCallback;

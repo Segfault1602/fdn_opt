@@ -575,6 +575,7 @@ std::vector<float> FDNModel::GenerateIR(const arma::mat& params) const
 
 double FDNModel::Evaluate(const arma::mat& params) const
 {
+    ++(*evaluation_count_);
     std::vector<float> ir = GenerateIR(params);
 
     double total_loss = 0.0;

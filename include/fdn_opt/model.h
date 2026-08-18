@@ -9,6 +9,7 @@
 #include "sffdn/types.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -70,6 +71,11 @@ class FDNModel
         gradient_threads_ = std::max(1u, thread_count);
     }
 
+    uint64_t GetEvaluationCount() const
+    {
+        return evaluation_count_->load();
+    }
+
     void SetEarlyFir(std::span<const float> early_fir)
     {
         early_fir_.assign(early_fir.begin(), early_fir.end());
@@ -122,6 +128,7 @@ class FDNModel
 
     double gradient_delta_ = 1e-3;
     uint32_t gradient_threads_ = 1;
+    std::shared_ptr<std::atomic<uint64_t>> evaluation_count_ = std::make_shared<std::atomic<uint64_t>>(0);
 
     GradientMethod gradient_method_ = GradientMethod::CentralDifferences;
     std::vector<float> early_fir_;

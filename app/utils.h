@@ -1,8 +1,11 @@
 #pragma once
 
+#include "optimizer.h"
+
 #include <sffdn/sffdn.h>
 
 #include <audio_utils/audio_file_manager.h>
+#include <audio_utils/fft.h>
 
 #include <nlohmann/json.hpp>
 #include <quill/LogMacros.h>
@@ -15,6 +18,204 @@
 #include <fstream>
 
 constexpr uint32_t kSampleRate = 48000;
+
+inline nlohmann::json OptimizationParametersToJson(const fdn_optimization::OptimizationAlgoParams& optimizer_params)
+{
+    return std::visit(
+        [](const auto& params) {
+            using T = std::decay_t<decltype(params)>;
+            nlohmann::json json;
+            if constexpr (std::is_same_v<T, fdn_optimization::AdamParameters>)
+            {
+                json = {{"step_size", params.step_size},
+                        {"beta1", params.beta1},
+                        {"beta2", params.beta2},
+                        {"learning_rate_decay", params.learning_rate_decay},
+                        {"decay_step_size", params.decay_step_size},
+                        {"epoch_restarts", params.epoch_restarts},
+                        {"max_restarts", params.max_restarts},
+                        {"max_iterations", params.max_iterations},
+                        {"tolerance", params.tolerance},
+                        {"gradient_delta", params.gradient_delta}};
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::L_BFGSParameters>)
+            {
+                json = {{"num_basis", params.num_basis},
+                        {"max_iterations", params.max_iterations},
+                        {"wolfe", params.wolfe},
+                        {"min_gradient_norm", params.min_gradient_norm},
+                        {"factor", params.factor},
+                        {"max_line_search_trials", params.max_line_search_trials},
+                        {"min_step", params.min_step},
+                        {"max_step", params.max_step},
+                        {"gradient_delta", params.gradient_delta}};
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::GradientDescentParameters>)
+            {
+                json = {{"step_size", params.step_size},
+                        {"max_iterations", params.max_iterations},
+                        {"tolerance", params.tolerance},
+                        {"kappa", params.kappa},
+                        {"phi", params.phi},
+                        {"momentum", params.momentum},
+                        {"min_gain", params.min_gain},
+                        {"gradient_delta", params.gradient_delta}};
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::SPSAParameters>)
+            {
+                json = {{"alpha", params.alpha},
+                        {"gamma", params.gamma},
+                        {"step_size", params.step_size},
+                        {"evaluation_step_size", params.evaluationStepSize},
+                        {"max_iterations", params.max_iterations},
+                        {"tolerance", params.tolerance}};
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::SimulatedAnnealingParameters>)
+            {
+                json = {{"max_iterations", params.max_iterations},
+                        {"initial_temperature", params.initial_temperature},
+                        {"init_moves", params.init_moves},
+                        {"move_ctrl_sweep", params.move_ctrl_sweep},
+                        {"max_tolerance_sweep", params.max_tolerance_sweep},
+                        {"max_move_coefficient", params.max_move_coef},
+                        {"init_move_coefficient", params.init_move_coef},
+                        {"gain", params.gain},
+                        {"tolerance", params.tolerance}};
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::CNEParameters>)
+            {
+                json = {{"population_size", params.population_size},
+                        {"max_generations", params.max_generations},
+                        {"mutation_probability", params.mutation_probability},
+                        {"mutation_size", params.mutation_size},
+                        {"select_percent", params.select_percent},
+                        {"tolerance", params.tolerance}};
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::DifferentialEvolutionParameters>)
+            {
+                json = {{"population_size", params.population_size},
+                        {"max_generations", params.max_generation},
+                        {"crossover_rate", params.crossover_rate},
+                        {"differential_weight", params.differential_weight},
+                        {"tolerance", params.tolerance}};
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::PSOParameters>)
+            {
+                json = {{"num_particles", params.num_particles},
+                        {"max_iterations", params.max_iterations},
+                        {"horizon_size", params.horizon_size},
+                        {"exploitation_factor", params.exploitation_factor},
+                        {"exploration_factor", params.exploration_factor},
+                        {"tolerance", params.tolerance}};
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::CMAESParameters>)
+            {
+                json = {{"population_size", params.population_size},
+                        {"max_iterations", params.max_iterations},
+                        {"tolerance", params.tolerance},
+                        {"step_size", params.step_size}};
+            }
+            else if constexpr (std::is_same_v<T, fdn_optimization::RandomSearchParameters>)
+            {
+                json = {{"time_limit_seconds", params.time_limit_seconds}};
+            }
+            return json;
+        },
+        optimizer_params);
+}
+
+inline nlohmann::json OptimizationResultToJson(const fdn_optimization::OptimizationResult& result,
+                                               const fdn_optimization::OptimizationAlgoParams& optimizer_params,
+                                               const nlohmann::json& run_metadata)
+{
+    nlohmann::json loss_components = nlohmann::json::object();
+    for (size_t i = 0; i < result.loss_names.size() && i < result.final_losses.size(); ++i)
+        loss_components[result.loss_names[i]] = result.final_losses[i];
+
+    const auto& config = result.optimized_fdn_config;
+    arma::fvec input_gains(config.input_block_config.parallel_gains_config.gains);
+    arma::fvec output_gains(config.output_block_config.parallel_gains_config.gains);
+
+    double orthogonality_error = 0.0;
+    if (std::holds_alternative<sfFDN::ScalarFeedbackMatrixOptions>(config.feedback_matrix_config))
+    {
+        const auto& options = std::get<sfFDN::ScalarFeedbackMatrixOptions>(config.feedback_matrix_config);
+        sfFDN::ScalarFeedbackMatrix matrix(options);
+        arma::mat coefficients(config.fdn_size, config.fdn_size);
+        for (uint32_t row = 0; row < config.fdn_size; ++row)
+        {
+            for (uint32_t col = 0; col < config.fdn_size; ++col)
+                coefficients(row, col) = matrix.GetCoefficient(row, col);
+        }
+        orthogonality_error =
+            arma::norm(coefficients.t() * coefficients - arma::eye(config.fdn_size, config.fdn_size), "fro");
+    }
+
+    return {{"execution", run_metadata},
+            {"optimizer_parameters", OptimizationParametersToJson(optimizer_params)},
+            {"timing",
+             {{"total_seconds", result.total_time.count()},
+              {"setup_seconds", result.setup_time.count()},
+              {"initial_evaluation_seconds", result.initial_evaluation_time.count()},
+              {"optimizer_seconds", result.optimizer_time.count()},
+              {"final_evaluation_seconds", result.final_evaluation_time.count()}}},
+            {"optimizer_callbacks", result.total_evaluations},
+            {"objective_evaluations", result.objective_evaluations},
+            {"effective_gradient_threads", result.gradient_threads},
+            {"effective_optimizer_threads", result.optimizer_threads},
+            {"termination_reason", result.termination_reason},
+            {"final_loss", result.best_loss},
+            {"loss_components", loss_components},
+            {"optimized_fdn_config", result.optimized_fdn_config},
+            {"validity",
+             {{"input_gain_norm", arma::norm(input_gains, 2)},
+              {"output_gain_norm", arma::norm(output_gains, 2)},
+              {"matrix_orthogonality_frobenius_error", orthogonality_error}}}};
+}
+
+inline bool WriteJsonToFile(const nlohmann::json& json, const std::filesystem::path& filename, quill::Logger* logger)
+{
+    std::ofstream file(filename, std::ios::out);
+    if (!file.is_open())
+    {
+        LOG_ERROR(logger, "Failed to open file {} for writing JSON.", filename.string());
+        return false;
+    }
+    file << json.dump(2) << '\n';
+    file.flush();
+    return file.good();
+}
+
+inline bool WriteTrajectoryJsonl(const std::vector<fdn_optimization::OptimizationStepInfo>& trajectory,
+                                 const std::vector<std::string>& loss_names, const std::filesystem::path& filename,
+                                 quill::Logger* logger)
+{
+    std::ofstream file(filename, std::ios::out);
+    if (!file.is_open())
+    {
+        LOG_ERROR(logger, "Failed to open file {} for writing trajectory.", filename.string());
+        return false;
+    }
+
+    for (const auto& step : trajectory)
+    {
+        nlohmann::json component_losses = nlohmann::json::object();
+        for (size_t i = 0; i < loss_names.size() && i < step.component_losses.size(); ++i)
+            component_losses[loss_names[i]] = step.component_losses[i];
+
+        const nlohmann::json row = {{"step", step.step},
+                                    {"total_loss", step.total_loss},
+                                    {"component_losses", component_losses},
+                                    {"best_loss", step.best_loss},
+                                    {"learning_rate", step.learning_rate},
+                                    {"gradient_norm", step.gradient_norm},
+                                    {"objective_evaluations", step.objective_evaluations},
+                                    {"elapsed_seconds", step.elapsed_time.count()}};
+        file << row.dump() << '\n';
+    }
+    file.flush();
+    return file.good();
+}
 
 inline void WriteConfigToFile(const sfFDN::FDNConfig& config, const std::filesystem::path& filename,
                               quill::Logger* logger)
@@ -44,6 +245,8 @@ inline void WriteInfoToFile(const fdn_optimization::OptimizationResult& result,
     file << "Best Loss: " << result.best_loss << std::endl;
     file << "Total Time (s): " << result.total_time.count() << std::endl;
     file << "Total Evaluations: " << result.total_evaluations << std::endl;
+    file << "Objective Evaluations: " << result.objective_evaluations << std::endl;
+    file << "Termination Reason: " << result.termination_reason << std::endl;
 
     std::visit(
         [&](const auto& params) {
@@ -54,6 +257,7 @@ inline void WriteInfoToFile(const fdn_optimization::OptimizationResult& result,
                 file << "    Step Size: " << params.step_size << std::endl;
                 file << "    Beta1: " << params.beta1 << std::endl;
                 file << "    Beta2: " << params.beta2 << std::endl;
+                file << "    Max Iterations: " << params.max_iterations << std::endl;
                 file << "    Tolerance: " << params.tolerance << std::endl;
             }
             else if constexpr (std::is_same_v<T, fdn_optimization::L_BFGSParameters>)

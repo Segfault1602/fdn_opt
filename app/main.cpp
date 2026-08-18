@@ -31,6 +31,19 @@ void SetOptimizerParams(const T& params, fdn_optimization::OptimizationAlgoParam
     optim_params = params;
 }
 
+struct ExecutionOptions
+{
+    fdn_optimization::GradientMethod gradient_method = fdn_optimization::GradientMethod::CentralDifferences;
+    uint32_t seed = 0;
+    uint32_t gradient_threads = fdn_optimization::DefaultGradientThreadCount();
+    uint32_t optimizer_threads = 1;
+    double max_time_seconds = 0.0;
+    uint64_t max_objective_evaluations = 0;
+    size_t sparsity_window_samples = 4096;
+    uint32_t spectral_fft_size = 65536;
+    bool record_trajectory = false;
+};
+
 const std::vector<float> kInitialInputGains = {0.021565, -0.10697,  0.271459, -0.507918,
                                                0.696453, -0.366612, 0.161309, -0.10464};
 const std::vector<float> kInitialOutputGains = {0.467987, -0.403734, 0.303612,  -0.192053,
@@ -45,8 +58,10 @@ const std::vector<float> kOptimizedMatrix = {
     -0.0730987, 0.144298,   0.160557,   -0.517478, 0.376585,   -0.555424,  -0.249098,  -0.02145,   -0.68595,  0.027881,
     -0.391745,  0.447998,   -0.0711281, -0.327048};
 
-sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = false, bool random_delays = false)
+sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = false, bool random_delays = false,
+                                        uint32_t seed = 0)
 {
+    const uint32_t sf_seed = std::max(seed, 1u);
     sfFDN::FDNConfig initial_fdn_config{};
     initial_fdn_config.fdn_size = fdn_order;
     initial_fdn_config.transposed = false;
@@ -82,7 +97,7 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
     {
         std::cout << "Using random delays..." << "\n";
         initial_fdn_config.delay_bank_config.delays =
-            sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Uniform);
+            sfFDN::GetDelayLengths(fdn_order, 512, 3000, sfFDN::DelayLengthType::Uniform, sf_seed);
     }
 
     initial_fdn_config.delay_bank_config.block_size = 128;
@@ -114,8 +129,11 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize = fal
             initial_fdn_config.output_block_config.parallel_gains_config.gains[i] = output_gains(i);
         }
 
-        initial_fdn_config.feedback_matrix_config =
-            sfFDN::ScalarFeedbackMatrixOptions{.matrix_size = fdn_order, .type = sfFDN::ScalarMatrixType::Random};
+        initial_fdn_config.feedback_matrix_config = sfFDN::ScalarFeedbackMatrixOptions{
+            .matrix_size = fdn_order,
+            .type = sfFDN::ScalarMatrixType::Random,
+            .custom_matrix = sfFDN::GenerateMatrix(fdn_order, sfFDN::ScalarMatrixType::Random, sf_seed),
+            .rng_seed = sf_seed};
     }
     else
     {
@@ -170,7 +188,7 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                        const sfFDN::FDNConfig& initial_fdn_config,
                                                        const fdn_optimization::OptimizationAlgoParams& optimizer_params,
                                                        const std::tuple<double, double, double>& loss_weights,
-                                                       uint32_t gradient_threads, bool verbose)
+                                                       const ExecutionOptions& execution_options, bool verbose)
 {
 
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::Gains,
@@ -184,14 +202,15 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
     {
         constexpr float kTargetSpectralFlatness = 0.5575f;
         loss_functions.push_back(std::make_shared<fdn_optimization::SpectralFlatnessLoss>(
-            kTargetSpectralFlatness, spectral_flatness_weight, 65536));
+            kTargetSpectralFlatness, spectral_flatness_weight, execution_options.spectral_fft_size));
     }
 
     // Time Domain Sparsity Loss
     const double sparsity_weight = std::get<1>(loss_weights);
     if (sparsity_weight > 0.0)
     {
-        loss_functions.push_back(std::make_shared<fdn_optimization::TimeDomainSparsityLoss>(sparsity_weight, 4096));
+        loss_functions.push_back(std::make_shared<fdn_optimization::TimeDomainSparsityLoss>(
+            sparsity_weight, execution_options.sparsity_window_samples));
     }
 
     // Power Envelope Loss
@@ -200,11 +219,17 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
     fdn_optimization::OptimizationInfo opt_info{.parameters_to_optimize = params_to_optimize,
                                                 .initial_fdn_config = initial_fdn_config,
                                                 .ir_size = kSampleRate,
-                                                .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
+                                                .gradient_method = execution_options.gradient_method,
                                                 .target_rir = {},
                                                 .early_fir = {},
                                                 .optimizer_params = optimizer_params,
-                                                .gradient_threads = gradient_threads};
+                                                .seed = execution_options.seed,
+                                                .gradient_threads = execution_options.gradient_threads,
+                                                .optimizer_threads = execution_options.optimizer_threads,
+                                                .max_time_seconds = execution_options.max_time_seconds,
+                                                .max_objective_evaluations =
+                                                    execution_options.max_objective_evaluations,
+                                                .record_trajectory = execution_options.record_trajectory};
 
     fdn_optimization::FDNOptimizer optimizer(logger, verbose);
 
@@ -223,7 +248,7 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
                                                       const std::vector<float>& target_rir,
                                                       const std::vector<float>& early_fir,
                                                       const std::tuple<double, double, double>& loss_weights,
-                                                      uint32_t gradient_threads, bool verbose)
+                                                      const ExecutionOptions& execution_options, bool verbose)
 {
     std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::AttenuationFilters,
                                       fdn_optimization::OptimizationParamType::TonecorrectionFilters,
@@ -232,11 +257,17 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
     fdn_optimization::OptimizationInfo opt_info{.parameters_to_optimize = params_to_optimize,
                                                 .initial_fdn_config = initial_fdn_config,
                                                 .ir_size = static_cast<uint32_t>(target_rir.size()),
-                                                .gradient_method = fdn_optimization::GradientMethod::CentralDifferences,
+                                                .gradient_method = execution_options.gradient_method,
                                                 .target_rir = target_rir,
                                                 .early_fir = early_fir,
                                                 .optimizer_params = optimizer_params,
-                                                .gradient_threads = gradient_threads};
+                                                .seed = execution_options.seed,
+                                                .gradient_threads = execution_options.gradient_threads,
+                                                .optimizer_threads = execution_options.optimizer_threads,
+                                                .max_time_seconds = execution_options.max_time_seconds,
+                                                .max_objective_evaluations =
+                                                    execution_options.max_objective_evaluations,
+                                                .record_trajectory = execution_options.record_trajectory};
 
     fdn_optimization::FDNOptimizer optimizer(logger, verbose);
 
@@ -355,13 +386,35 @@ int main(int argc, char** argv)
 
     bool save_output = true;
     app.add_flag("-s,--save_output", save_output, "Save optimization results to output directory");
+    bool no_save_output = false;
+    app.add_flag("--no-save-output", no_save_output, "Disable writing WAV and configuration output");
 
     bool verbose = false;
     app.add_flag("-v,--verbose", verbose, "Enable verbose logging");
 
-    uint32_t gradient_threads = fdn_optimization::DefaultGradientThreadCount();
-    app.add_option("--gradient_threads", gradient_threads, "Threads used for finite-difference gradients")
-        ->check(CLI::PositiveNumber)
+    std::string gradient_method_name = "central";
+    app.add_option("--gradient_method", gradient_method_name, "Finite-difference method")
+        ->check(CLI::IsMember({"central", "forward"}));
+
+    ExecutionOptions execution_options;
+    app.add_option("--seed", execution_options.seed, "Random seed")->capture_default_str();
+    app.add_option("--gradient_threads", execution_options.gradient_threads,
+                   "Threads used for finite-difference gradients; 0 uses the OpenMP maximum")
+        ->capture_default_str();
+    app.add_option("--optimizer_threads", execution_options.optimizer_threads,
+                   "Threads used by supported population optimizers; 0 uses the OpenMP maximum")
+        ->capture_default_str();
+    app.add_option("--max_time_seconds", execution_options.max_time_seconds,
+                   "In-process optimizer time budget in seconds; 0 disables the budget")
+        ->capture_default_str();
+    app.add_option("--max_objective_evaluations", execution_options.max_objective_evaluations,
+                   "Objective-evaluation budget; 0 disables the budget")
+        ->capture_default_str();
+    app.add_option("--sparsity_window_samples", execution_options.sparsity_window_samples,
+                   "Number of initial IR samples used by the sparsity loss; thesis runs used 4096")
+        ->capture_default_str();
+    app.add_option("--spectral_fft_size", execution_options.spectral_fft_size,
+                   "FFT size used by the spectral-flatness loss; thesis IPP runs used 65536")
         ->capture_default_str();
 
     double spectral_flatness_weight = 1.0;
@@ -391,6 +444,17 @@ int main(int argc, char** argv)
     app.add_option("-o,--output_dir", output_dir, "Output directory for optimization results    ")
         ->capture_default_str();
 
+    std::string result_json_path;
+    app.add_option("--result_json", result_json_path, "Write machine-readable colorless results to this JSON file");
+    std::string spectrum_result_json_path;
+    app.add_option("--spectrum_result_json", spectrum_result_json_path,
+                   "Write machine-readable RIR-matching results to this JSON file");
+    std::string trajectory_jsonl_path;
+    app.add_option("--trajectory_jsonl", trajectory_jsonl_path, "Write colorless accepted-step trajectory as JSONL");
+    std::string spectrum_trajectory_jsonl_path;
+    app.add_option("--spectrum_trajectory_jsonl", spectrum_trajectory_jsonl_path,
+                   "Write RIR-matching accepted-step trajectory as JSONL");
+
     fdn_optimization::OptimizationAlgoParams optimizer_params;
 
     // ADAM
@@ -401,6 +465,7 @@ int main(int argc, char** argv)
     adam_sub->add_option("--beta2", adam_params.beta2, "Beta2 parameter for Adam optimizer");
     adam_sub->add_option("--tolerance", adam_params.tolerance, "Tolerance for Adam optimizer");
     adam_sub->add_option("--gradient_delta", adam_params.gradient_delta, "Gradient delta for Adam optimizer");
+    adam_sub->add_option("--max_iterations", adam_params.max_iterations, "Maximum Adam iterations");
     adam_sub->callback([&]() { SetOptimizerParams(adam_params, optimizer_params); });
 
     // SPSA
@@ -526,9 +591,31 @@ int main(int argc, char** argv)
     app.require_subcommand(1);
     CLI11_PARSE(app, argc, argv);
 
+    if (no_save_output)
+    {
+        save_output = false;
+    }
+
+    execution_options.gradient_method = gradient_method_name == "forward"
+                                            ? fdn_optimization::GradientMethod::ForwardDifferences
+                                            : fdn_optimization::GradientMethod::CentralDifferences;
+    execution_options.record_trajectory = !trajectory_jsonl_path.empty();
+    ExecutionOptions matching_execution_options = execution_options;
+    matching_execution_options.record_trajectory = !spectrum_trajectory_jsonl_path.empty();
+
     if (!colorless_only && ir_filename.empty())
     {
         std::cerr << "RIR matching requires --ir; use --colorless_only to skip matching.\n";
+        return -1;
+    }
+    if (execution_options.max_time_seconds < 0.0)
+    {
+        std::cerr << "--max_time_seconds cannot be negative.\n";
+        return -1;
+    }
+    if (execution_options.spectral_fft_size < kSampleRate)
+    {
+        std::cerr << "--spectral_fft_size must be at least " << kSampleRate << " samples.\n";
         return -1;
     }
 
@@ -537,7 +624,8 @@ int main(int argc, char** argv)
         logger->set_log_level(quill::LogLevel::Debug);
     }
 
-    LOG_INFO(logger, "Using {} threads for finite-difference gradients.", gradient_threads);
+    LOG_INFO(logger, "Requested gradient threads: {}, optimizer threads: {}.", execution_options.gradient_threads,
+             execution_options.optimizer_threads);
 
     auto config_filename = app.get_config_ptr()->as<std::string>();
     LOG_INFO(logger, "Using configuration file: {}", config_filename);
@@ -562,10 +650,19 @@ int main(int argc, char** argv)
     if (save_output)
     {
         optim_subdir = std::filesystem::path(output_dir) / output_dir_name;
-        std::filesystem::create_directory(optim_subdir);
+        std::filesystem::create_directories(optim_subdir);
     }
 
-    auto initial_fdn_config = CreateInitialFDNConfig(fdn_order, randomize_initial, random_delays);
+    arma::arma_rng::set_seed(execution_options.seed);
+    auto initial_fdn_config =
+        CreateInitialFDNConfig(fdn_order, randomize_initial, random_delays, execution_options.seed);
+    const auto shortest_delay = *std::ranges::min_element(initial_fdn_config.delay_bank_config.delays);
+    if (execution_options.sparsity_window_samples <= shortest_delay)
+    {
+        std::cerr << "--sparsity_window_samples must be greater than the shortest delay (" << shortest_delay
+                  << " samples).\n";
+        return -1;
+    }
 
     if (save_output)
     {
@@ -582,7 +679,7 @@ int main(int argc, char** argv)
         result =
             OptimizeColorless(logger, initial_fdn_config, optimizer_params,
                               std::make_tuple(spectral_flatness_weight, sparsity_weight, power_envelope_weight),
-                              gradient_threads, verbose);
+                              execution_options, verbose);
     }
     catch (const std::exception& error)
     {
@@ -593,6 +690,40 @@ int main(int argc, char** argv)
     LOG_INFO(logger, "[Colorless] Final loss: {:.6f}", result.best_loss);
     LOG_INFO(logger, "[Colorless] Elapsed time: {:.4f} s", result.total_time.count());
     LOG_INFO(logger, "[Colorless] Total evaluations: {}", result.total_evaluations);
+    LOG_INFO(logger, "[Colorless] Objective evaluations: {}", result.objective_evaluations);
+    LOG_INFO(logger, "[Colorless] Termination reason: {}", result.termination_reason);
+
+    if (!trajectory_jsonl_path.empty() &&
+        !WriteTrajectoryJsonl(result.trajectory, result.loss_names, trajectory_jsonl_path, logger))
+    {
+        return -1;
+    }
+
+    if (!result_json_path.empty())
+    {
+        const uint32_t actual_fft_size = audio_utils::FFT::NextSupportedFFTSize(execution_options.spectral_fft_size);
+        const nlohmann::json metadata = {{"stage", "colorless"},
+                                         {"optimizer", selected_optimizer},
+                                         {"fdn_order", fdn_order},
+                                         {"sample_rate", kSampleRate},
+                                         {"ir_samples", kSampleRate},
+                                         {"seed", execution_options.seed},
+                                         {"gradient_method", gradient_method_name},
+                                         {"gradient_threads", execution_options.gradient_threads},
+                                         {"optimizer_threads", execution_options.optimizer_threads},
+                                         {"max_time_seconds", execution_options.max_time_seconds},
+                                         {"max_objective_evaluations",
+                                          execution_options.max_objective_evaluations},
+                                         {"spectral_flatness_target", 0.5575},
+                                         {"spectral_flatness_weight", spectral_flatness_weight},
+                                         {"sparsity_weight", sparsity_weight},
+                                         {"sparsity_window_samples", execution_options.sparsity_window_samples},
+                                         {"fft_backend", audio_utils::FFT::BackendName()},
+                                         {"requested_fft_size", execution_options.spectral_fft_size},
+                                         {"actual_fft_size", actual_fft_size}};
+        if (!WriteJsonToFile(OptimizationResultToJson(result, optimizer_params, metadata), result_json_path, logger))
+            return -1;
+    }
 
     if (save_output)
     {
@@ -666,8 +797,8 @@ int main(int argc, char** argv)
     try
     {
         result = OptimizeSpectrum(logger, initial_fdn_config, optimizer_params, target_rir, early_fir,
-                                  std::make_tuple(edc_weight, mel_edr_weight, weighted_edr_weight), gradient_threads,
-                                  verbose);
+                                  std::make_tuple(edc_weight, mel_edr_weight, weighted_edr_weight),
+                                  matching_execution_options, verbose);
     }
     catch (const std::exception& error)
     {
@@ -677,6 +808,41 @@ int main(int argc, char** argv)
     LOG_INFO(logger, "[Spectrum] Final loss: {:.6f}", result.best_loss);
     LOG_INFO(logger, "[Spectrum] Elapsed time: {:.4f} s", result.total_time.count());
     LOG_INFO(logger, "[Spectrum] Total evaluations: {}", result.total_evaluations);
+    LOG_INFO(logger, "[Spectrum] Objective evaluations: {}", result.objective_evaluations);
+    LOG_INFO(logger, "[Spectrum] Termination reason: {}", result.termination_reason);
+
+    if (!spectrum_trajectory_jsonl_path.empty() &&
+        !WriteTrajectoryJsonl(result.trajectory, result.loss_names, spectrum_trajectory_jsonl_path, logger))
+    {
+        return -1;
+    }
+
+    if (!spectrum_result_json_path.empty())
+    {
+        const nlohmann::json metadata = {{"stage", "spectrum"},
+                                         {"optimizer", selected_optimizer},
+                                         {"fdn_order", fdn_order},
+                                         {"sample_rate", kSampleRate},
+                                         {"target_rir", ir_filename},
+                                         {"target_rir_samples", target_rir.size()},
+                                         {"early_fir", early_fir_path},
+                                         {"seed", matching_execution_options.seed},
+                                         {"gradient_method", gradient_method_name},
+                                         {"gradient_threads", matching_execution_options.gradient_threads},
+                                         {"optimizer_threads", matching_execution_options.optimizer_threads},
+                                         {"max_time_seconds", matching_execution_options.max_time_seconds},
+                                         {"max_objective_evaluations",
+                                          matching_execution_options.max_objective_evaluations},
+                                         {"fft_backend", audio_utils::FFT::BackendName()},
+                                         {"edc_weight", edc_weight},
+                                         {"mel_edr_weight", mel_edr_weight},
+                                         {"weighted_edr_weight", weighted_edr_weight}};
+        if (!WriteJsonToFile(OptimizationResultToJson(result, optimizer_params, metadata), spectrum_result_json_path,
+                             logger))
+        {
+            return -1;
+        }
+    }
 
     if (save_output)
     {

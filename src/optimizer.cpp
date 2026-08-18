@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <omp.h>
 #include <thread>
 
 template <typename T>
@@ -35,11 +36,47 @@ namespace fdn_optimization
 class OptimCallback
 {
   public:
-    OptimCallback(std::stop_token stop_token, double decay_rate = 0.99)
+    OptimCallback(std::stop_token stop_token, const FDNModel* model,
+                  std::chrono::steady_clock::time_point optimization_start, double max_time_seconds,
+                  uint64_t max_objective_evaluations, bool record_trajectory, double decay_rate = 0.99)
         : stop_token_(stop_token)
         , evaluation_count_(0)
         , decay_rate_(decay_rate)
+        , model_(model)
+        , optimization_start_(optimization_start)
+        , max_time_seconds_(max_time_seconds)
+        , max_objective_evaluations_(max_objective_evaluations)
+        , record_trajectory_(record_trajectory)
     {
+    }
+
+    bool ShouldTerminate()
+    {
+        if (stop_token_.stop_requested())
+            SetTerminationCode(1);
+        else if (max_objective_evaluations_ > 0 && model_->GetEvaluationCount() >= max_objective_evaluations_)
+            SetTerminationCode(3);
+        else if (max_time_seconds_ > 0.0 &&
+                 std::chrono::duration<double>(std::chrono::steady_clock::now() - optimization_start_).count() >=
+                     max_time_seconds_)
+            SetTerminationCode(2);
+
+        return termination_code_.load() != 0;
+    }
+
+    std::string TerminationReason() const
+    {
+        switch (termination_code_.load())
+        {
+        case 1:
+            return "canceled";
+        case 2:
+            return "time_budget";
+        case 3:
+            return "evaluation_budget";
+        default:
+            return "converged";
+        }
     }
 
     template <typename OptimizerType, typename FunctionType, typename MatType>
@@ -71,28 +108,6 @@ class OptimCallback
             }
         }
 
-        // if constexpr (std::is_same_v<OptimizerType, ens::DE>)
-        // {
-        //     if (de_pop_size_ > 0)
-        //     {
-        //         if (objective < de_best_objective_)
-        //         {
-        //             de_best_objective_ = objective;
-        //             de_best_params_ = iterate;
-        //         }
-        //         // For DE, there is no easy way to get the best objective per generation so we have to keep track of
-        //         // it manually.
-        //         ++de_pop_evals_;
-        //         if (de_pop_evals_ == de_pop_size_ * 2) // Each generation evaluates 2 * population size
-        //         {
-        //             de_pop_evals_ = 0;
-        //             function.Evaluate(de_best_params_);
-        //             SaveLossHistory(function, de_best_objective_);
-        //             de_best_objective_ = std::numeric_limits<double>::max();
-        //             de_best_params_.zeros();
-        //         }
-        //     }
-        // }
         if constexpr (std::is_same_v<OptimizerType, ens::CNE>)
         {
             if (de_pop_size_ > 0)
@@ -116,14 +131,24 @@ class OptimCallback
             }
         }
 
-        return stop_token_.stop_requested();
+        return ShouldTerminate();
+    }
+
+    template <typename OptimizerType, typename FunctionType, typename MatType, typename GradType>
+    bool Gradient(OptimizerType&, FunctionType&, const MatType&, GradType& gradient)
+    {
+        last_gradient_norm_ = arma::norm(gradient, 2);
+        return ShouldTerminate();
     }
 
     template <typename OptimizerType, typename FunctionType, typename MatType>
     bool EndEpoch(OptimizerType& optimizer, FunctionType& function, const MatType&, const size_t epoch,
                   const double objective)
     {
-        SaveLossHistory(function, objective);
+        double learning_rate = 0.0;
+        if constexpr (HasStepSize<OptimizerType>)
+            learning_rate = optimizer.StepSize();
+        SaveLossHistory(function, objective, learning_rate, last_gradient_norm_);
 
         if constexpr (is_same_template_v<OptimizerType, ens::SGD<>>)
         {
@@ -139,11 +164,11 @@ class OptimCallback
             }
         }
 
-        return stop_token_.stop_requested();
+        return ShouldTerminate();
     }
 
     template <typename OptimizerType, typename FunctionType, typename MatType>
-    bool StepTaken(OptimizerType&, FunctionType& function, MatType& iterate)
+    bool StepTaken(OptimizerType& optimizer, FunctionType& function, MatType& iterate)
     {
         step_was_taken_ = true;
 
@@ -155,26 +180,38 @@ class OptimCallback
                       is_same_template_v<OptimizerType, ens::CMAES<>> ||
                       is_same_template_v<OptimizerType, ens::ActiveCMAES<>>)
         {
-            SaveLossHistory(function, function.Evaluate(iterate));
+            double learning_rate = 0.0;
+            if constexpr (HasStepSize<OptimizerType>)
+                learning_rate = optimizer.StepSize();
+            SaveLossHistory(function, function.Evaluate(iterate), learning_rate, last_gradient_norm_);
         }
 
-        return false;
+        return ShouldTerminate();
     }
 
     template <typename FunctionType>
-    void SaveLossHistory(FunctionType&, double objective)
+    void SaveLossHistory(FunctionType&, double objective, double learning_rate = 0.0, double gradient_norm = 0.0)
     {
-        {
-            std::scoped_lock lock(mutex_);
-            loss_history_.push_back(objective);
-        }
-
         auto individual_losses = LossRegistry::Instance().GetLosses();
         assert(individual_losses_.size() == individual_losses.size());
+        std::scoped_lock lock(mutex_);
+        loss_history_.push_back(objective);
         for (size_t i = 0; i < individual_losses.size(); ++i)
-        {
             individual_losses_[i].push_back(individual_losses[i]);
+
+        if (record_trajectory_)
+        {
+            best_recorded_loss_ = std::min(best_recorded_loss_, objective);
+            trajectory_.push_back({.step = completed_steps_,
+                                   .total_loss = objective,
+                                   .component_losses = individual_losses,
+                                   .best_loss = best_recorded_loss_,
+                                   .learning_rate = learning_rate,
+                                   .gradient_norm = gradient_norm,
+                                   .objective_evaluations = model_->GetEvaluationCount(),
+                                   .elapsed_time = std::chrono::steady_clock::now() - optimization_start_});
         }
+        ++completed_steps_;
     }
 
     std::vector<std::vector<double>> GetLossHistory()
@@ -187,6 +224,12 @@ class OptimCallback
             all_losses.push_back(losses);
         }
         return all_losses;
+    }
+
+    std::vector<OptimizationStepInfo> GetTrajectory()
+    {
+        std::scoped_lock lock(mutex_);
+        return trajectory_;
     }
 
     std::stop_token stop_token_;
@@ -203,12 +246,28 @@ class OptimCallback
     arma::mat de_best_params_;
 
   private:
+    void SetTerminationCode(int code)
+    {
+        int expected = 0;
+        termination_code_.compare_exchange_strong(expected, code);
+    }
+
     std::mutex mutex_;
     std::vector<double> loss_history_;
     bool step_was_taken_ = false;
     double starting_step_size_ = 0.01;
+    const FDNModel* model_;
+    std::chrono::steady_clock::time_point optimization_start_;
+    double max_time_seconds_;
+    uint64_t max_objective_evaluations_;
+    std::atomic<int> termination_code_{0};
+    bool record_trajectory_;
+    size_t completed_steps_ = 0;
+    double last_gradient_norm_ = 0.0;
+    double best_recorded_loss_ = std::numeric_limits<double>::infinity();
 
     std::vector<std::vector<double>> individual_losses_;
+    std::vector<OptimizationStepInfo> trajectory_;
 };
 
 struct OptimizationVisitor
@@ -248,7 +307,8 @@ struct OptimizationVisitor
         LOG_INFO(logger, "Starting Adam optimization with step size: {}, beta1: {}, beta2: {}, tolerance: {}",
                  adam_params.step_size, adam_params.beta1, adam_params.beta2, adam_params.tolerance);
 
-        ens::Adam optimizer(adam_params.step_size, 1, adam_params.beta1, adam_params.beta2, 1e-8, 1e6,
+        ens::Adam optimizer(adam_params.step_size, 1, adam_params.beta1, adam_params.beta2, 1e-8,
+                            adam_params.max_iterations,
                             adam_params.tolerance, false, true, true);
         DoOptimize(optimizer);
     }
@@ -318,7 +378,7 @@ struct OptimizationVisitor
 
         ens::LBestPSO optimizer(p.num_particles, -1.0, 1.0, p.max_iterations, p.horizon_size, p.tolerance,
                                 p.exploitation_factor, p.exploration_factor);
-        optimizer.NumThreads() = 0; // Use all available threads
+        optimizer.NumThreads() = info.optimizer_threads;
 
         DoOptimize(optimizer);
     }
@@ -333,8 +393,9 @@ struct OptimizationVisitor
 
         params = optimizer.GetBestParams();
         optim_callback->evaluation_count_ = optimizer.GetEvaluationCount();
-        model.Evaluate(params);
-        optim_callback->SaveLossHistory(model, optimizer.GetBestObjective());
+        const double evaluated_objective = model.Evaluate(params);
+        const double best_objective = optimizer.GetBestObjective();
+        optim_callback->SaveLossHistory(model, std::isfinite(best_objective) ? best_objective : evaluated_objective);
     }
 
     void operator()(L_BFGSParameters& p)
@@ -556,6 +617,13 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         return;
     }
 
+    arma::arma_rng::set_seed(info.seed);
+    omp_set_max_active_levels(1);
+    if (info.gradient_threads == 0)
+        info.gradient_threads = static_cast<uint32_t>(std::max(1, omp_get_max_threads()));
+    if (info.optimizer_threads == 0)
+        info.optimizer_threads = static_cast<uint32_t>(std::max(1, omp_get_max_threads()));
+
     bool optimizing_filters =
         std::ranges::find(info.parameters_to_optimize, fdn_optimization::OptimizationParamType::AttenuationFilters) !=
         info.parameters_to_optimize.end();
@@ -582,6 +650,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         info.ir_size = static_cast<uint32_t>(info.target_rir.size());
     }
 
+    const auto setup_start = std::chrono::steady_clock::now();
     FDNModel model(info.initial_fdn_config, info.ir_size, info.parameters_to_optimize, info.gradient_method);
     model.SetGradientThreads(info.gradient_threads);
 
@@ -623,16 +692,21 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         LOG_INFO(logger_, "Initial parameters: {}", param_stream.str());
     }
 
+    const auto initial_evaluation_start = std::chrono::steady_clock::now();
     auto initial_loss = model.Evaluate(params);
+    const auto initial_evaluation_end = std::chrono::steady_clock::now();
     if (!std::isfinite(initial_loss))
         throw std::runtime_error("Initial objective is not finite.");
     LOG_INFO(logger_, "Initial loss: {}", initial_loss);
 
     sfFDN::FDNConfig initial_config = model.GetFDNConfig(params);
 
+    const auto optimization_start = std::chrono::steady_clock::now();
     {
         std::scoped_lock lock(mutex_);
-        optim_callback_ = std::make_unique<OptimCallback>(stop_token);
+        optim_callback_ =
+            std::make_unique<OptimCallback>(stop_token, &model, optimization_start, info.max_time_seconds,
+                                            info.max_objective_evaluations, info.record_trajectory);
     }
 
     OptimizationVisitor visitor{.params = params,
@@ -642,8 +716,11 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
                                 .logger = logger_,
                                 .verbose = verbose_};
     std::visit(visitor, info.optimizer_params);
+    const auto optimization_end = std::chrono::steady_clock::now();
 
+    const auto final_evaluation_start = std::chrono::steady_clock::now();
     double final_loss = model.Evaluate(params);
+    const auto final_evaluation_end = std::chrono::steady_clock::now();
     if (!std::isfinite(final_loss))
         throw std::runtime_error("Final objective is not finite.");
     LOG_INFO(logger_, "Final loss: {}", final_loss);
@@ -655,6 +732,7 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         LOG_INFO(logger_, "Optimization finished. Final parameters: {}", param_stream.str());
     }
 
+    OptimizationStatus final_status;
     {
         std::scoped_lock lock(mutex_);
 
@@ -669,9 +747,19 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         optimization_result_.initial_fdn_config = initial_config;
         optimization_result_.optimized_fdn_config = optimized_config_;
         optimization_result_.total_time = std::chrono::steady_clock::now() - start_time_;
+        optimization_result_.setup_time = initial_evaluation_start - setup_start;
+        optimization_result_.initial_evaluation_time = initial_evaluation_end - initial_evaluation_start;
+        optimization_result_.optimizer_time = optimization_end - optimization_start;
+        optimization_result_.final_evaluation_time = final_evaluation_end - final_evaluation_start;
         optimization_result_.total_evaluations = optim_callback_->evaluation_count_.load();
+        optimization_result_.objective_evaluations = model.GetEvaluationCount();
+        optimization_result_.gradient_threads = info.gradient_threads;
+        optimization_result_.optimizer_threads = info.optimizer_threads;
         optimization_result_.loss_history = optim_callback_->GetLossHistory();
         optimization_result_.best_loss = final_loss;
+        optimization_result_.final_losses = LossRegistry::Instance().GetLosses();
+        optimization_result_.trajectory = optim_callback_->GetTrajectory();
+        optimization_result_.termination_reason = optim_callback_->TerminationReason();
 
         optimization_result_.loss_names.clear();
         auto loss_functions = model.GetLossFunctions();
@@ -679,13 +767,11 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         {
             optimization_result_.loss_names.push_back(lf->GetName());
         }
-    }
 
-    OptimizationStatus final_status;
-    {
-        std::scoped_lock lock(mutex_);
         final_status = status_.load() == OptimizationStatus::CancelRequested ? OptimizationStatus::Canceled
                                                                              : OptimizationStatus::Completed;
+        if (final_status == OptimizationStatus::Canceled)
+            optimization_result_.termination_reason = "canceled";
         status_.store(final_status);
     }
     status_cv_.notify_all();
