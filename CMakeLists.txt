@@ -8,6 +8,8 @@ project(
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(FdnOpt_ENABLE_HARDENING "Enable hardening" ON)
 option(FdnOpt_USE_SANITIZER "Use AddressSanitizer" OFF)
+option(FDN_OPT_ENABLE_IPO "Enable interprocedural optimization" OFF)
+option(FDN_OPT_ENABLE_NATIVE_ARCH "Optimize for the build machine CPU" OFF)
 option(FDN_OPT_BUILD_APPS "Build applications" ${PROJECT_IS_TOP_LEVEL})
 
 include(cmake/project-warnings.cmake)
