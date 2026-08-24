@@ -2,8 +2,12 @@
 
 #include "optimizer_cli.h"
 
+#include <cmath>
 #include <map>
+#include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -64,7 +68,7 @@ void RegisterExecutionOptions(CLI::App& app, fdn_opt_app::RawCliOptions& options
     group->add_option("--seed", options.execution.seed, "Random seed")->capture_default_str();
     group
         ->add_option("--gradient_threads", options.execution.gradient_threads,
-                     "Threads used for finite-difference gradients; 0 uses the OpenMP maximum")
+                     "Threads used for finite differences and optimizer probes; 0 uses the OpenMP maximum")
         ->capture_default_str();
     group
         ->add_option("--optimizer_threads", options.execution.optimizer_threads,
@@ -163,6 +167,9 @@ void RegisterInitializationOptions(CLI::App& app, fdn_opt_app::RawCliOptions& op
                     "Randomize initial FDN configuration instead of using Householder matrix");
     group->add_flag("--random_delays", options.initialization.random_delays,
                     "Use random delay lengths instead of predefined sets");
+    group->add_option("--init_seed", options.initialization.init_seed,
+                      "Seed for the initial FDN configuration; defaults to --seed. Set it separately to hold the "
+                      "problem instance fixed while varying optimizer stochasticity");
 }
 
 void RegisterOutputOptions(CLI::App& app, fdn_opt_app::RawCliOptions& options)
@@ -181,6 +188,123 @@ void RegisterOutputOptions(CLI::App& app, fdn_opt_app::RawCliOptions& options)
                       "Write colorless accepted-step trajectory as JSONL");
     group->add_option("--spectrum_trajectory_jsonl", options.output.spectrum_trajectory_jsonl_path,
                       "Write RIR-matching accepted-step trajectory as JSONL");
+}
+
+std::optional<std::string> ValidateBlockSPSAParameters(
+    const fdn_optimization::OptimizationAlgoParams& optimizer_parameters)
+{
+    if (!std::holds_alternative<fdn_optimization::BlockSPSAParameters>(optimizer_parameters))
+    {
+        return std::nullopt;
+    }
+
+    const auto& parameters = std::get<fdn_optimization::BlockSPSAParameters>(optimizer_parameters);
+    if (parameters.directions_per_block == 0)
+    {
+        return "BlockSPSA directions_per_block must be positive.";
+    }
+    if (parameters.accepted_evaluation_interval == 0)
+    {
+        return "BlockSPSA accepted_eval_interval must be positive.";
+    }
+    if (!std::isfinite(parameters.max_step_norm) || parameters.max_step_norm < 0.0)
+    {
+        return "BlockSPSA max_step_norm must be finite and nonnegative.";
+    }
+    if (parameters.block_strategy == fdn_optimization::ParameterBlockStrategy::FixedContiguous &&
+        parameters.contiguous_block_size == 0)
+    {
+        return "BlockSPSA fixed block size must be positive.";
+    }
+    for (const auto& scale : parameters.block_scales)
+    {
+        if (!std::isfinite(scale.a_scale) || scale.a_scale <= 0.0 || !std::isfinite(scale.c_scale) ||
+            scale.c_scale <= 0.0)
+        {
+            return "BlockSPSA block scales must be finite and positive.";
+        }
+        // Contiguous blocks carry no semantic type, so a named class would silently do nothing.
+        if (parameters.block_strategy == fdn_optimization::ParameterBlockStrategy::FixedContiguous &&
+            scale.scale_class != fdn_optimization::BlockScaleClass::Default)
+        {
+            return "BlockSPSA --block_scale only supports the 'default' class with --block_strategy fixed.";
+        }
+    }
+    if (parameters.stall_window && *parameters.stall_window > parameters.max_iterations)
+    {
+        return "BlockSPSA --stall_window cannot exceed --max_iterations.";
+    }
+    if (parameters.max_iterations == 0 || !std::isfinite(parameters.alpha) || parameters.alpha <= 0.0 ||
+        !std::isfinite(parameters.gamma) || parameters.gamma <= 0.0 || !std::isfinite(parameters.step_size) ||
+        parameters.step_size <= 0.0 || !std::isfinite(parameters.evaluation_step_size) ||
+        parameters.evaluation_step_size <= 0.0 || !std::isfinite(parameters.tolerance) || parameters.tolerance < 0.0 ||
+        (parameters.stability_constant &&
+         (!std::isfinite(*parameters.stability_constant) || *parameters.stability_constant < 0.0)))
+    {
+        return "Invalid BlockSPSA optimizer parameters.";
+    }
+    return std::nullopt;
+}
+
+// Parses `<class>:<a_scale>:<c_scale>` block gain-scale specifications.
+std::expected<std::vector<fdn_optimization::BlockGainScale>, std::string> ParseBlockScaleSpecs(
+    const std::vector<std::string>& specs)
+{
+    static const std::map<std::string, fdn_optimization::BlockScaleClass> kClasses = {
+        {"default", fdn_optimization::BlockScaleClass::Default},
+        {"gains_in", fdn_optimization::BlockScaleClass::GainsInput},
+        {"gains_out", fdn_optimization::BlockScaleClass::GainsOutput},
+        {"matrix", fdn_optimization::BlockScaleClass::Matrix},
+        {"attenuation", fdn_optimization::BlockScaleClass::Attenuation},
+        {"tone", fdn_optimization::BlockScaleClass::Tone},
+        {"overall_gain", fdn_optimization::BlockScaleClass::OverallGain},
+    };
+
+    std::vector<fdn_optimization::BlockGainScale> scales;
+    for (const auto& spec : specs)
+    {
+        const auto first = spec.find(':');
+        const auto second = first == std::string::npos ? std::string::npos : spec.find(':', first + 1);
+        if (first == std::string::npos || second == std::string::npos)
+        {
+            return std::unexpected("--block_scale expects <class>:<a_scale>:<c_scale>, got '" + spec + "'.");
+        }
+
+        const auto found = kClasses.find(spec.substr(0, first));
+        if (found == kClasses.end())
+        {
+            return std::unexpected("Unknown --block_scale class '" + spec.substr(0, first) + "'.");
+        }
+
+        fdn_optimization::BlockGainScale scale{.scale_class = found->second, .a_scale = 1.0, .c_scale = 1.0};
+        const std::string a_text = spec.substr(first + 1, second - first - 1);
+        const std::string c_text = spec.substr(second + 1);
+        try
+        {
+            std::size_t consumed = 0;
+            scale.a_scale = std::stod(a_text, &consumed);
+            if (consumed != a_text.size())
+            {
+                return std::unexpected("--block_scale values must be numbers, got '" + spec + "'.");
+            }
+            scale.c_scale = std::stod(c_text, &consumed);
+            if (consumed != c_text.size())
+            {
+                return std::unexpected("--block_scale values must be numbers, got '" + spec + "'.");
+            }
+        }
+        catch (const std::exception&)
+        {
+            return std::unexpected("--block_scale values must be numbers, got '" + spec + "'.");
+        }
+        if (!std::isfinite(scale.a_scale) || scale.a_scale <= 0.0 || !std::isfinite(scale.c_scale) ||
+            scale.c_scale <= 0.0)
+        {
+            return std::unexpected("--block_scale values must be finite and positive, got '" + spec + "'.");
+        }
+        scales.push_back(scale);
+    }
+    return scales;
 }
 
 } // namespace
@@ -213,6 +337,13 @@ std::expected<ParsedCliOptions, std::string> ValidateAndNormalizeCliOptions(cons
     {
         return std::unexpected("Invalid matching parameterization options.");
     }
+    if (std::holds_alternative<fdn_optimization::GradientDescentParameters>(options.optimizer.selected_params))
+    {
+        const auto& parameters =
+            std::get<fdn_optimization::GradientDescentParameters>(options.optimizer.selected_params);
+        if (!std::isfinite(parameters.max_step_norm) || parameters.max_step_norm < 0.0)
+            return std::unexpected("GradientDescent max_step_norm must be finite and nonnegative.");
+    }
     if (options.execution.max_time_seconds < 0.0)
     {
         return std::unexpected("--max_time_seconds cannot be negative.");
@@ -226,6 +357,25 @@ std::expected<ParsedCliOptions, std::string> ValidateAndNormalizeCliOptions(cons
         return std::unexpected("An optimizer subcommand is required.");
     }
 
+    auto optimizer_params = options.optimizer.selected_params;
+    if (std::holds_alternative<fdn_optimization::BlockSPSAParameters>(optimizer_params))
+    {
+        auto scales = ParseBlockScaleSpecs(options.optimizer.block_spsa_scale_specs);
+        if (!scales)
+        {
+            return std::unexpected(scales.error());
+        }
+        std::get<fdn_optimization::BlockSPSAParameters>(optimizer_params).block_scales = std::move(*scales);
+    }
+    // Config files populate options for inactive subcommands too.  Ignore a
+    // [BlockSPSA] block_scale list when a different optimizer is selected;
+    // CLI11 itself still rejects --block_scale on another subcommand.
+
+    if (const auto block_spsa_error = ValidateBlockSPSAParameters(optimizer_params))
+    {
+        return std::unexpected(*block_spsa_error);
+    }
+
     ParsedCliOptions parsed;
     parsed.input = options.input;
     parsed.losses = options.losses;
@@ -236,7 +386,7 @@ std::expected<ParsedCliOptions, std::string> ValidateAndNormalizeCliOptions(cons
     parsed.matching_execution = options.execution;
     parsed.matching_execution.record_trajectory = !options.output.spectrum_trajectory_jsonl_path.empty();
     parsed.matching = options.matching;
-    parsed.optimizer_params = options.optimizer.selected_params;
+    parsed.optimizer_params = std::move(optimizer_params);
     parsed.selected_optimizer = options.optimizer.selected_name;
     parsed.save_output = options.output.save_output && !options.output.no_save_output;
     parsed.verbose = options.verbose;

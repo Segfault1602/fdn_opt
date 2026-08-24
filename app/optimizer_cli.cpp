@@ -1,5 +1,6 @@
 #include "optimizer_cli.h"
 
+#include <map>
 #include <utility>
 
 namespace
@@ -37,6 +38,60 @@ void RegisterOptimizerSubcommands(CLI::App& app, OptimizerCliOptions& options)
     spsa->add_option("--max_iterations", options.spsa.max_iterations, "Maximum iterations for SPSA optimizer");
     spsa->add_option("--tolerance", options.spsa.tolerance, "Tolerance for SPSA optimizer");
     spsa->callback([&options]() { SelectOptimizer(options, "SPSA", options.spsa); });
+
+    auto* block_spsa = app.add_subcommand("BlockSPSA", "Use block-coordinate SPSA optimization");
+    block_spsa->add_option("--mode", options.block_spsa.mode, "BlockSPSA update mode")
+        ->transform(CLI::CheckedTransformer(std::map<std::string, fdn_optimization::BlockSPSAMode>{
+            {"snapshot", fdn_optimization::BlockSPSAMode::SnapshotSweepAll},
+            {"random-one", fdn_optimization::BlockSPSAMode::RandomOne},
+        }));
+    block_spsa->add_option("--block_strategy", options.block_spsa.block_strategy, "Parameter block strategy")
+        ->transform(CLI::CheckedTransformer(std::map<std::string, fdn_optimization::ParameterBlockStrategy>{
+            {"semantic", fdn_optimization::ParameterBlockStrategy::Semantic},
+            {"fixed", fdn_optimization::ParameterBlockStrategy::FixedContiguous},
+        }));
+    block_spsa->add_option("--random_schedule", options.block_spsa.random_schedule, "Random block schedule")
+        ->transform(CLI::CheckedTransformer(std::map<std::string, fdn_optimization::RandomBlockSchedule>{
+            {"shuffled", fdn_optimization::RandomBlockSchedule::ShuffledSweep},
+            {"uniform", fdn_optimization::RandomBlockSchedule::IndependentUniform},
+        }));
+    block_spsa
+        ->add_option("--three_band_grouping", options.block_spsa.three_band_grouping,
+                     "Semantic grouping for independent three-band attenuation")
+        ->transform(CLI::CheckedTransformer(std::map<std::string, fdn_optimization::ThreeBandBlockGrouping>{
+            {"channel-triplets", fdn_optimization::ThreeBandBlockGrouping::ChannelTriplets},
+            {"frequency-bands", fdn_optimization::ThreeBandBlockGrouping::FrequencyBands},
+        }));
+    block_spsa->add_option("--block_size", options.block_spsa.contiguous_block_size, "Fixed contiguous block size");
+    block_spsa
+        ->add_option("--probe_radius_normalization", options.block_spsa.probe_radius_normalization,
+                     "Scales the probe amplitude by block dimension")
+        ->transform(CLI::CheckedTransformer(std::map<std::string, fdn_optimization::ProbeRadiusNormalization>{
+            {"none", fdn_optimization::ProbeRadiusNormalization::None},
+            {"sqrt-dim", fdn_optimization::ProbeRadiusNormalization::SqrtDimension},
+        }));
+    block_spsa->add_option("--block_scale", options.block_spsa_scale_specs,
+                           "Per-class gain scales as <class>:<a_scale>:<c_scale>; repeatable. Classes: default, "
+                           "gains_in, gains_out, matrix, attenuation, tone, overall_gain");
+    block_spsa->add_option("--accepted_eval_interval", options.block_spsa.accepted_evaluation_interval,
+                           "Evaluate the accepted point every N updates instead of every update");
+    block_spsa->add_option("--max_step_norm", options.block_spsa.max_step_norm,
+                           "Cap on the Euclidean norm of one coordinate update; 0 disables it");
+    block_spsa->add_option("--stall_window", options.block_spsa.stall_window,
+                           "Evaluated accepted points over which the best loss must improve by more than "
+                           "--tolerance; 0 disables early stopping");
+    block_spsa->add_option("--directions_per_block", options.block_spsa.directions_per_block,
+                           "Perturbation directions averaged per block");
+    block_spsa->add_option("--alpha", options.block_spsa.alpha, "Step-size decay exponent");
+    block_spsa->add_option("--gamma", options.block_spsa.gamma, "Perturbation decay exponent");
+    block_spsa->add_option("--step_size", options.block_spsa.step_size, "Step-size scale");
+    block_spsa->add_option("--evaluation_step_size", options.block_spsa.evaluation_step_size, "Perturbation scale");
+    block_spsa->add_option("--stability_constant", options.block_spsa.stability_constant,
+                           "Optional absolute gain stability constant");
+    block_spsa->add_option("--max_iterations", options.block_spsa.max_iterations, "Maximum accepted BlockSPSA updates");
+    block_spsa->add_option("--tolerance", options.block_spsa.tolerance,
+                           "Relative best-loss improvement required across --stall_window evaluated points");
+    block_spsa->callback([&options]() { SelectOptimizer(options, "BlockSPSA", options.block_spsa); });
 
     auto* simulated_annealing =
         app.add_subcommand("SimulatedAnnealing", "Use Simulated Annealing optimization algorithm");
@@ -125,6 +180,8 @@ void RegisterOptimizerSubcommands(CLI::App& app, OptimizerCliOptions& options)
         ->add_option("--gradient_delta", options.gradient_descent.gradient_delta,
                      "Gradient delta for Gradient Descent optimizer when optimizing filters")
         ->default_val(1e-2);
+    gradient_descent->add_option("--max_step_norm", options.gradient_descent.max_step_norm,
+                                 "Cap on one Momentum Delta-Bar-Delta update; 0 disables it");
     gradient_descent->callback([&options]() { SelectOptimizer(options, "GradientDescent", options.gradient_descent); });
 
     auto* cmaes = app.add_subcommand("CMAES", "Use CMA-ES optimization algorithm");

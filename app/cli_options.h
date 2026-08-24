@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fdn_opt_app
 {
@@ -67,6 +68,9 @@ struct InitializationOptions
 {
     bool randomize_initial = false;
     bool random_delays = false;
+    // Seeds the initial FDN configuration. Unset reuses the execution seed, which conflates the
+    // problem instance with optimizer stochasticity and prevents separating robustness from luck.
+    std::optional<uint32_t> init_seed;
 };
 
 struct OutputOptions
@@ -86,6 +90,9 @@ struct OptimizerCliOptions
     std::string selected_name;
     fdn_optimization::AdamParameters adam;
     fdn_optimization::SPSAParameters spsa;
+    fdn_optimization::BlockSPSAParameters block_spsa;
+    // Unparsed `<class>:<a_scale>:<c_scale>` specifications for BlockSPSA block gain scales.
+    std::vector<std::string> block_spsa_scale_specs;
     fdn_optimization::SimulatedAnnealingParameters simulated_annealing;
     fdn_optimization::CNEParameters cne;
     fdn_optimization::DifferentialEvolutionParameters differential_evolution;

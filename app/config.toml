@@ -38,6 +38,21 @@ evaluation_step_size = 1.132721870064672
 max_iterations = 1000000
 tolerance = 1e-5
 
+[BlockSPSA]
+step_size = 51.36856103655465
+evaluation_step_size = 0.1274603915360556
+stability_constant = 15.55350824284848
+alpha = 0.44541503073811406
+gamma = 0.26535782766381644
+directions_per_block = 4
+mode = "snapshot"
+block_strategy = "semantic"
+random_schedule = "shuffled"
+probe_radius_normalization = "none"
+accepted_eval_interval = 1
+max_step_norm = 1.0
+tolerance = 1e-5
+
 [SimulatedAnnealing]
 max_iterations = 1000000
 initial_temperature = 5
@@ -81,6 +96,7 @@ phi = 0.01
 momentum = 0.812
 min_gain = 1e-2
 gradient_delta = 1e-1
+max_step_norm = 0.0
 
 [CMAES]
 population_size = 10

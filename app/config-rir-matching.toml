@@ -1,0 +1,150 @@
+# RIR-matching-only configuration
+#
+# Provenance: concert-hall NSGA-II tuning, N=8, thesis-faithful 3-band matching,
+# random RT60 initialization, direct-path early FIR, 4 threads; accepted after 12 held-out seeds.
+# Generalization validated on meeting_room and office_lobby. RandomSearch remains untuned.
+
+ir = "../rirs/py_rirs/rir_concert_hall.wav"
+early_fir_path = "../rirs/py_rirs/early_reflections_filter/early_concert_hall.wav"
+num_channels = 8
+spectral_flatness_weight = 1
+sparsity_weight = 0.5
+power_envelope_weight = 0
+edc_weight = 0.1
+mel_edr_weight = 1
+weighted_edr_weight = 0
+randomize_initial_params = false
+random_delays = false
+matching_filter_type = "3band"
+matching_initialization = "random"
+save_output = true
+verbose = true
+
+[L-BFGS]
+# Tuned on concert_hall; held-out room medians:
+# concert_hall=0.010905, meeting_room=0.007971, office_lobby=0.018435.
+# Improvement over concert-hall incumbent: 59.7%.
+num_basis = 13
+max_iterations = 688
+wolfe = 0.8546366488678708
+max_line_search = 53
+min_gradient_norm = 1.678861289003167e-08
+factor = 1.7410976911860362e-13
+gradient_delta = 0.005087368202829873
+min_step = 1e-20
+max_step = 1e20
+
+[Adam]
+# Tuned on concert_hall; held-out room medians:
+# concert_hall=0.020940, meeting_room=0.007909, office_lobby=0.018648.
+# Improvement over concert-hall incumbent: 83.8%.
+step_size = 0.01415682760783907
+beta1 = 0.8817131289468394
+tolerance = 1.8551684526113878e-07
+max_iterations = 2327
+beta2 = 0.9290539231414752
+gradient_delta = 0.01
+
+[SPSA]
+# Tuned candidate rejected: no valid incumbent (default failed).
+# Retaining shipped incumbent.
+alpha = 0.2880938193488607
+gamma = 0.7373144814549601
+step_size = 1.6640000000000001
+evaluation_step_size = 1.132721870064672
+max_iterations = 1000000
+tolerance = 1e-5
+
+[BlockSPSA]
+# Tuned on concert_hall; held-out room medians:
+# concert_hall=0.016379, meeting_room=0.009704, office_lobby=0.021158.
+# Improvement over concert-hall incumbent: 46.9%.
+step_size = 8.72124107507604
+evaluation_step_size = 0.03652760582085782
+stability_constant = 161.88023205885085
+alpha = 0.4074201574707456
+gamma = 0.4755784907490115
+max_step_norm = 1.0349578577007343
+directions_per_block = 1
+tolerance = 6.709425909797098e-05
+stall_window = 320
+max_iterations = 7578
+mode = "snapshot"
+block_strategy = "semantic"
+random_schedule = "shuffled"
+probe_radius_normalization = "none"
+accepted_eval_interval = 1
+block_scale = ["attenuation:2.5140841111296766:0.9711107286375275", "tone:0.40045493705374097:0.7862662730066963", "overall_gain:0.3203531808496319:0.14115904814050217"]
+
+[SimulatedAnnealing]
+# Tuned on concert_hall; held-out room medians:
+# concert_hall=0.055041, meeting_room=0.014459, office_lobby=0.031696.
+# Improvement over concert-hall incumbent: 52.2%.
+initial_temperature = 0.5113007199819358
+init_moves = 206
+move_ctrl_sweep = 15
+max_tolerance_sweep = 4
+max_move_coeff = 24.58623391467423
+init_move_coeff = 0.025632542951562563
+gain = 0.7188287156432291
+tolerance = 0.00014790552196423276
+max_iterations = 124961
+
+[CNE]
+# Tuned on concert_hall; held-out room medians:
+# concert_hall=0.076795, meeting_room=0.040283, office_lobby=0.140753.
+# Improvement over concert-hall incumbent: 24.3%.
+population_size = 82
+max_generations = 4165
+mutation_probability = 0.011838288500026257
+mutation_size = 0.12273397513680598
+select_percent = 0.29680584290545414
+tolerance = 0.0001994968503978872
+
+[DifferentialEvolution]
+# Tuned on concert_hall; held-out room medians:
+# concert_hall=0.031879, meeting_room=0.022089, office_lobby=0.056616.
+# Improvement over concert-hall incumbent: 52.1%.
+population_size = 634
+max_generations = 442
+crossover_rate = 0.9767983284150052
+differential_weight = 0.7200634774391111
+tolerance = 0.00042736022405851914
+
+[PSO]
+# Tuned on concert_hall; held-out room medians:
+# concert_hall=0.025024, meeting_room=0.021368, office_lobby=0.050135.
+# Improvement over concert-hall incumbent: 8.3%.
+num_particles = 45
+max_iterations = 1991
+tolerance = 1.413335407803018e-06
+horizon_size = 221
+exploitation_factor = 2.0818751258045385
+exploration_factor = 2.1102229100722045
+
+[GradientDescent]
+# Trust-region Momentum Delta-Bar-Delta, tuned after saturation investigation.
+# concert_hall=0.013301, meeting_room=0.008393, office_lobby=0.018968.
+# Improvement over concert-hall incumbent: 89.8%.
+step_size = 20
+kappa = 0.004837998433178365
+phi = 0.6904292600926617
+momentum = 0.4134871604209004
+min_gain = 4.5037914968952005e-7
+gradient_delta = 0.01
+max_step_norm = 1.0
+tolerance = 1e-8
+max_iterations = 5000
+
+[CMAES]
+# Tuned after fixing parameter-aware CMA-ES matching bounds.
+# concert_hall=0.017477, meeting_room=0.011753, office_lobby=0.034304.
+# Improvement over pre-fix concert-hall incumbent: 99.9%.
+population_size = 10
+step_size = 0.108
+tolerance = 0.0001
+max_iterations = 200000
+
+[RandomSearch]
+# Untuned trivial baseline.
+time_limit = 10.0
