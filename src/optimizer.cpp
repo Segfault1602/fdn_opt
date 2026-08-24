@@ -1,6 +1,7 @@
 #include "optimizer.h"
 
 #include "audio_loss.h"
+#include "block_spsa_optimizer.h"
 #include "model.h"
 #include "optimizer_internal.h"
 #include "random_searcher.h"
@@ -66,6 +67,10 @@ class OptimCallback
 
     std::string TerminationReason() const
     {
+        if (explicit_termination_reason_)
+        {
+            return *explicit_termination_reason_;
+        }
         switch (termination_code_.load())
         {
         case 1:
@@ -76,6 +81,84 @@ class OptimCallback
             return "evaluation_budget";
         default:
             return "converged";
+        }
+    }
+
+    void SetTerminationReason(std::string_view reason)
+    {
+        explicit_termination_reason_ = reason;
+        if (reason == "canceled")
+        {
+            SetTerminationCode(1);
+        }
+        else if (reason == "time_budget")
+        {
+            SetTerminationCode(2);
+        }
+        else if (reason == "evaluation_budget")
+        {
+            SetTerminationCode(3);
+        }
+    }
+
+    void InitializeLosses(const FDNModel& model)
+    {
+        const auto loss_functions = model.GetLossFunctions();
+        std::scoped_lock lock(mutex_);
+        individual_losses_.resize(loss_functions.size());
+    }
+
+    void RecordBlockSPSAStep(const BlockSPSAStep& step)
+    {
+        ++evaluation_count_;
+        {
+            std::scoped_lock lock(mutex_);
+            // Updates that skip the accepted-point evaluation carry a stale evaluation, so they
+            // must not add duplicate rows to the loss history.
+            if (step.evaluated)
+            {
+                loss_history_.push_back(step.evaluation.total);
+                for (size_t index = 0; index < step.evaluation.components.size(); ++index)
+                {
+                    individual_losses_[index].push_back(step.evaluation.components[index]);
+                }
+            }
+            if (record_trajectory_)
+            {
+                std::vector<BlockSPSAProbeInfo> probes;
+                probes.reserve(step.block_probes.size());
+                for (const auto& probe : step.block_probes)
+                {
+                    probes.push_back({.block = probe.block,
+                                      .block_size = probe.block_size,
+                                      .visit = probe.visit,
+                                      .learning_rate = probe.learning_rate,
+                                      .perturbation = probe.perturbation,
+                                      .probe_plus = probe.probe_plus,
+                                      .probe_minus = probe.probe_minus,
+                                      .paired_difference = probe.paired_difference,
+                                      .absolute_paired_difference = probe.absolute_paired_difference,
+                                      .gradient_norm = probe.gradient_norm,
+                                      .step_norm = probe.step_norm});
+                }
+                trajectory_.push_back({.step = step.step,
+                                       .total_loss = step.evaluation.total,
+                                       .component_losses = step.evaluation.components,
+                                       .best_loss = step.best_loss,
+                                       .learning_rate = step.learning_rate,
+                                       .gradient_norm = step.gradient_norm,
+                                       .objective_evaluations = step.objective_evaluations,
+                                       .elapsed_time = step.elapsed_time,
+                                       .active_block = step.active_block,
+                                       .block_visit = step.block_visit,
+                                       .perturbation = step.perturbation,
+                                       .directions_averaged = step.directions_averaged,
+                                       .evaluated = step.evaluated,
+                                       .improved_best = step.improved_best,
+                                       .step_norm = step.step_norm,
+                                       .block_probes = std::move(probes)});
+            }
+            ++completed_steps_;
         }
     }
 
@@ -209,7 +292,15 @@ class OptimCallback
                                    .learning_rate = learning_rate,
                                    .gradient_norm = gradient_norm,
                                    .objective_evaluations = model_->GetEvaluationCount(),
-                                   .elapsed_time = std::chrono::steady_clock::now() - optimization_start_});
+                                   .elapsed_time = std::chrono::steady_clock::now() - optimization_start_,
+                                   .active_block = std::nullopt,
+                                   .block_visit = std::nullopt,
+                                   .perturbation = std::nullopt,
+                                   .directions_averaged = std::nullopt,
+                                   .evaluated = std::nullopt,
+                                   .improved_best = std::nullopt,
+                                   .step_norm = std::nullopt,
+                                   .block_probes = {}});
         }
         ++completed_steps_;
     }
@@ -261,6 +352,7 @@ class OptimCallback
     double max_time_seconds_;
     uint64_t max_objective_evaluations_;
     std::atomic<int> termination_code_{0};
+    std::optional<std::string> explicit_termination_reason_;
     bool record_trajectory_;
     size_t completed_steps_ = 0;
     double last_gradient_norm_ = 0.0;
@@ -278,23 +370,31 @@ struct OptimizationVisitor
     const OptimizationInfo& info;
     quill::Logger* logger;
     bool verbose;
+    ObjectiveEvaluation initial_evaluation;
+    std::optional<BlockSPSAResult> block_spsa_result;
 
-    template <typename OptimizerType>
-    void DoOptimize(OptimizerType& optimizer)
+    template <typename OptimizerType, typename FunctionType>
+    void DoOptimizeFunction(OptimizerType& optimizer, FunctionType& function, arma::mat& coordinates)
     {
         ens::StoreBestCoordinates<arma::mat> store_best;
 
         if (verbose)
         {
-            optimizer.Optimize(model, params, store_best, ens::Report(), *optim_callback);
+            optimizer.Optimize(function, coordinates, store_best, ens::Report(), *optim_callback);
         }
         else
         {
-            optimizer.Optimize(model, params, store_best, *optim_callback);
+            optimizer.Optimize(function, coordinates, store_best, *optim_callback);
         }
-        const double final_objective = model.Evaluate(params);
+        const double final_objective = function.Evaluate(coordinates);
         if (detail::ShouldUseStoredBest(store_best.BestCoordinates(), store_best.BestObjective(), final_objective))
-            params = store_best.BestCoordinates();
+            coordinates = store_best.BestCoordinates();
+    }
+
+    template <typename OptimizerType>
+    void DoOptimize(OptimizerType& optimizer)
+    {
+        DoOptimizeFunction(optimizer, model, params);
     }
 
     void operator()(AdamParameters& adam_params)
@@ -308,8 +408,7 @@ struct OptimizationVisitor
                  adam_params.step_size, adam_params.beta1, adam_params.beta2, adam_params.tolerance);
 
         ens::Adam optimizer(adam_params.step_size, 1, adam_params.beta1, adam_params.beta2, 1e-8,
-                            adam_params.max_iterations,
-                            adam_params.tolerance, false, true, true);
+                            adam_params.max_iterations, adam_params.tolerance, false, true, true);
         DoOptimize(optimizer);
     }
 
@@ -322,8 +421,34 @@ struct OptimizationVisitor
                  spsa_params.max_iterations, spsa_params.tolerance);
         ens::SPSA optimizer(spsa_params.alpha, spsa_params.gamma, spsa_params.step_size, spsa_params.evaluationStepSize,
                             spsa_params.max_iterations, spsa_params.tolerance);
-
         DoOptimize(optimizer);
+    }
+
+    void operator()(BlockSPSAParameters& parameters)
+    {
+        LOG_INFO(logger,
+                 "Starting BlockSPSA optimization with mode: {}, block strategy: {}, directions per block: {}, "
+                 "alpha: {}, gamma: {}, step size: {}, evaluation step size: {}, max iterations: {}, tolerance: {}",
+                 parameters.mode == BlockSPSAMode::SnapshotSweepAll ? "snapshot" : "random-one",
+                 parameters.block_strategy == ParameterBlockStrategy::Semantic ? "semantic" : "fixed",
+                 parameters.directions_per_block, parameters.alpha, parameters.gamma, parameters.step_size,
+                 parameters.evaluation_step_size, parameters.max_iterations, parameters.tolerance);
+
+        const auto layout = BuildParameterLayout(info.initial_fdn_config.fdn_size, info.parameters_to_optimize);
+        const auto blocks =
+            parameters.block_strategy == ParameterBlockStrategy::Semantic
+                ? BuildSemanticParameterBlocks(layout, info.initial_fdn_config.fdn_size, parameters.three_band_grouping)
+                : BuildContiguousParameterBlocks(layout.total_size, parameters.contiguous_block_size);
+
+        optim_callback->InitializeLosses(model);
+        BlockSPSAOptimizer optimizer(parameters);
+        block_spsa_result =
+            optimizer.Optimize(model, params, initial_evaluation, blocks, info.seed, info.gradient_threads,
+                               info.max_objective_evaluations, info.max_time_seconds, optim_callback->stop_token_,
+                               [this](const BlockSPSAStep& step) { optim_callback->RecordBlockSPSAStep(step); });
+        params = block_spsa_result->parameters;
+        LossRegistry::Instance().RegisterLoss(block_spsa_result->evaluation.components);
+        optim_callback->SetTerminationReason(block_spsa_result->termination_reason);
     }
 
     void operator()(SimulatedAnnealingParameters& p)
@@ -416,13 +541,23 @@ struct OptimizationVisitor
     {
         LOG_INFO(logger,
                  "Starting Gradient Descent optimization with step size: {}, max iterations: {}, tolerance: {}, kappa: "
-                 "{}, phi: {}, momentum: {}, min gain: {}",
-                 p.step_size, p.max_iterations, p.tolerance, p.kappa, p.phi, p.momentum, p.min_gain);
-        // ens::SGD optimizer(p.step_size, 1, p.max_iterations, p.tolerance, false);
-        ens::MomentumDeltaBarDelta optimizer(p.step_size, p.max_iterations, p.tolerance, p.kappa, p.phi, p.momentum,
-                                             p.min_gain, false);
-
-        DoOptimize(optimizer);
+                 "{}, phi: {}, momentum: {}, min gain: {}, max step norm: {}",
+                 p.step_size, p.max_iterations, p.tolerance, p.kappa, p.phi, p.momentum, p.min_gain, p.max_step_norm);
+        if (p.max_step_norm > 0.0)
+        {
+            detail::CappedMomentumDeltaBarDeltaUpdate update_policy(p.kappa, p.phi, p.momentum, p.min_gain,
+                                                                    p.max_step_norm);
+            ens::GradientDescentType<detail::CappedMomentumDeltaBarDeltaUpdate, ens::NoDecay> optimizer(
+                p.step_size, p.max_iterations, p.tolerance, update_policy, ens::NoDecay(), false);
+            DoOptimize(optimizer);
+        }
+        else
+        {
+            // Preserve the exact historical Ensmallen implementation when the cap is disabled.
+            ens::MomentumDeltaBarDelta optimizer(p.step_size, p.max_iterations, p.tolerance, p.kappa, p.phi, p.momentum,
+                                                 p.min_gain, false);
+            DoOptimize(optimizer);
+        }
     }
 
     void operator()(CMAESParameters& p)
@@ -431,15 +566,34 @@ struct OptimizationVisitor
                  "Starting CMA-ES optimization with population size: {}, max iterations: {}, tolerance: {}, step size: "
                  "{}",
                  p.population_size, p.max_iterations, p.tolerance, p.step_size);
-        ens::BoundaryBoxConstraint b(-1.0, 1.0);
-        // ens::BIPOP_CMAES optimizer(p.population_size, ens::EmptyTransformation<>(), 1, p.max_iterations, p.tolerance,
-        //                            ens::FullSelection(), p.step_size, 3, 3, 1e6);
-        // ens::IPOP_CMAES optimizer(p.population_size, b, 1, p.max_iterations, p.tolerance, ens::FullSelection(),
-        //                           p.step_size, 5, 2.0, 1e6);
-        ens::ActiveCMAES optimizer(p.population_size, b, 1, p.max_iterations, p.tolerance, ens::FullSelection(),
-                                   p.step_size);
+        const bool has_matching_coordinates =
+            std::ranges::any_of(info.parameters_to_optimize, [](OptimizationParamType type) {
+                return type == OptimizationParamType::AttenuationFilters ||
+                       type == OptimizationParamType::AttenuationFilters_3Band ||
+                       type == OptimizationParamType::TonecorrectionFilters ||
+                       type == OptimizationParamType::OverallGain;
+            });
 
-        DoOptimize(optimizer);
+        if (has_matching_coordinates)
+        {
+            // Matching uses heterogeneous coordinates.  Valid seeded T60 logits can be near +/-17,
+            // tone coordinates map +/-1 to +/-12 dB, and overall gain is represented in log space.
+            // One global [-1, 1] box changes the physical initial T60s; no box permits extreme tone
+            // and gain candidates that overflow the objective.  Use parameter-aware bounds instead.
+            const auto layout = BuildParameterLayout(info.initial_fdn_config.fdn_size, info.parameters_to_optimize);
+            const auto coordinate_bounds = detail::BuildMatchingCMAESBounds(layout, info.matching_parameters);
+            ens::BoundaryBoxConstraint bounds(coordinate_bounds.lower, coordinate_bounds.upper);
+            ens::ActiveCMAES<ens::FullSelection, ens::BoundaryBoxConstraint<>> optimizer(
+                p.population_size, bounds, 1, p.max_iterations, p.tolerance, ens::FullSelection(), p.step_size);
+            DoOptimize(optimizer);
+        }
+        else
+        {
+            ens::BoundaryBoxConstraint b(-1.0, 1.0);
+            ens::ActiveCMAES<ens::FullSelection, ens::BoundaryBoxConstraint<>> optimizer(
+                p.population_size, b, 1, p.max_iterations, p.tolerance, ens::FullSelection(), p.step_size);
+            DoOptimize(optimizer);
+        }
     }
 };
 
@@ -541,9 +695,9 @@ void FDNOptimizer::ResetStatus()
     {
         std::scoped_lock lock(mutex_);
         const auto current_status = status_.load();
-        cancel_active_optimization =
-            current_status == OptimizationStatus::Running || current_status == OptimizationStatus::StartRequested ||
-            current_status == OptimizationStatus::CancelRequested;
+        cancel_active_optimization = current_status == OptimizationStatus::Running ||
+                                     current_status == OptimizationStatus::StartRequested ||
+                                     current_status == OptimizationStatus::CancelRequested;
         if (cancel_active_optimization)
             status_.store(OptimizationStatus::CancelRequested);
     }
@@ -696,7 +850,8 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     }
 
     const auto initial_evaluation_start = std::chrono::steady_clock::now();
-    auto initial_loss = model.Evaluate(params);
+    auto initial_evaluation = model.EvaluateDetailed(params);
+    const auto initial_loss = initial_evaluation.total;
     const auto initial_evaluation_end = std::chrono::steady_clock::now();
     if (!std::isfinite(initial_loss))
         throw std::runtime_error("Initial objective is not finite.");
@@ -707,9 +862,8 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
     const auto optimization_start = std::chrono::steady_clock::now();
     {
         std::scoped_lock lock(mutex_);
-        optim_callback_ =
-            std::make_unique<OptimCallback>(stop_token, &model, optimization_start, info.max_time_seconds,
-                                            info.max_objective_evaluations, info.record_trajectory);
+        optim_callback_ = std::make_unique<OptimCallback>(stop_token, &model, optimization_start, info.max_time_seconds,
+                                                          info.max_objective_evaluations, info.record_trajectory);
     }
 
     OptimizationVisitor visitor{.params = params,
@@ -717,12 +871,17 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
                                 .optim_callback = optim_callback_.get(),
                                 .info = info,
                                 .logger = logger_,
-                                .verbose = verbose_};
+                                .verbose = verbose_,
+                                .initial_evaluation = initial_evaluation,
+                                .block_spsa_result = std::nullopt};
     std::visit(visitor, info.optimizer_params);
     const auto optimization_end = std::chrono::steady_clock::now();
 
     const auto final_evaluation_start = std::chrono::steady_clock::now();
-    double final_loss = model.Evaluate(params);
+    const bool used_block_spsa = visitor.block_spsa_result.has_value();
+    const ObjectiveEvaluation final_evaluation =
+        used_block_spsa ? visitor.block_spsa_result->evaluation : model.EvaluateDetailed(params);
+    const double final_loss = final_evaluation.total;
     const auto final_evaluation_end = std::chrono::steady_clock::now();
     if (!std::isfinite(final_loss))
         throw std::runtime_error("Final objective is not finite.");
@@ -753,16 +912,29 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         optimization_result_.setup_time = initial_evaluation_start - setup_start;
         optimization_result_.initial_evaluation_time = initial_evaluation_end - initial_evaluation_start;
         optimization_result_.optimizer_time = optimization_end - optimization_start;
-        optimization_result_.final_evaluation_time = final_evaluation_end - final_evaluation_start;
+        optimization_result_.final_evaluation_time =
+            used_block_spsa ? std::chrono::duration<double>::zero() : final_evaluation_end - final_evaluation_start;
         optimization_result_.total_evaluations = optim_callback_->evaluation_count_.load();
         optimization_result_.objective_evaluations = model.GetEvaluationCount();
         optimization_result_.gradient_threads = info.gradient_threads;
         optimization_result_.optimizer_threads = info.optimizer_threads;
         optimization_result_.loss_history = optim_callback_->GetLossHistory();
         optimization_result_.best_loss = final_loss;
-        optimization_result_.final_losses = LossRegistry::Instance().GetLosses();
+        optimization_result_.final_losses = final_evaluation.components;
         optimization_result_.trajectory = optim_callback_->GetTrajectory();
         optimization_result_.termination_reason = optim_callback_->TerminationReason();
+        if (visitor.block_spsa_result)
+        {
+            optimization_result_.parameter_block_count = visitor.block_spsa_result->block_count;
+            optimization_result_.optimizer_stability_constant = visitor.block_spsa_result->stability_constant;
+            optimization_result_.optimizer_stall_window = visitor.block_spsa_result->stall_window;
+        }
+        else
+        {
+            optimization_result_.parameter_block_count.reset();
+            optimization_result_.optimizer_stability_constant.reset();
+            optimization_result_.optimizer_stall_window.reset();
+        }
 
         optimization_result_.loss_names.clear();
         auto loss_functions = model.GetLossFunctions();

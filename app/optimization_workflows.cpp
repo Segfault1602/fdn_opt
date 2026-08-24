@@ -1,5 +1,6 @@
 #include "optimization_workflows.h"
 
+#include "initialization.h"
 #include "model.h"
 #include "utils.h"
 
@@ -74,17 +75,14 @@ sfFDN::FDNConfig CreateInitialFDNConfig(uint32_t fdn_order, bool randomize, bool
     if (randomize)
     {
         std::cout << "Using random initial parameters..." << "\n";
-        // arma::arma_rng::set_seed_random();
-        arma::fvec input_gains(fdn_order, arma::fill::randn);
-        arma::fvec output_gains(fdn_order, arma::fill::randn);
-
-        input_gains /= arma::norm(input_gains, 2);
-        output_gains /= arma::norm(output_gains, 2);
+        // Use a local stream keyed by the configuration seed.  sfFDN APIs may reserve zero and
+        // still receive sf_seed below, but user-visible init seeds 0 and 1 remain distinct here.
+        const auto gains = fdn_optimization::GenerateRandomNormalizedGains(fdn_order, seed);
 
         for (uint32_t i = 0; i < fdn_order; ++i)
         {
-            initial_fdn_config.input_block_config.parallel_gains_config.gains[i] = input_gains(i);
-            initial_fdn_config.output_block_config.parallel_gains_config.gains[i] = output_gains(i);
+            initial_fdn_config.input_block_config.parallel_gains_config.gains[i] = gains.input[i];
+            initial_fdn_config.output_block_config.parallel_gains_config.gains[i] = gains.output[i];
         }
 
         initial_fdn_config.feedback_matrix_config = sfFDN::ScalarFeedbackMatrixOptions{

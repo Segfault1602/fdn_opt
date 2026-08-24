@@ -150,7 +150,8 @@ std::expected<sfFDN::FDNConfig, std::string> OptimizationApplication::CreateOrLo
     }
 
     auto config = CreateInitialFDNConfig(fdn_order_, options_.initialization.randomize_initial,
-                                         options_.initialization.random_delays, options_.colorless_execution.seed);
+                                         options_.initialization.random_delays,
+                                         options_.initialization.init_seed.value_or(options_.colorless_execution.seed));
     const auto shortest_delay = *std::ranges::min_element(config.delay_bank_config.delays);
     if (options_.colorless_execution.sparsity_window_samples <= shortest_delay)
     {
@@ -355,6 +356,7 @@ nlohmann::json OptimizationApplication::BuildColorlessMetadata() const
             {"sample_rate", kSampleRate},
             {"ir_samples", kSampleRate},
             {"seed", options_.colorless_execution.seed},
+            {"init_seed", options_.initialization.init_seed.value_or(options_.colorless_execution.seed)},
             {"gradient_method", GradientMethodName(options_.colorless_execution.gradient_method)},
             {"gradient_threads", options_.colorless_execution.gradient_threads},
             {"optimizer_threads", options_.colorless_execution.optimizer_threads},
@@ -389,6 +391,10 @@ nlohmann::json OptimizationApplication::BuildMatchingMetadata(size_t target_size
             {"matching_tone_scale_db", options_.matching.parameter_config.tone_gain_scale_db},
             {"matching_zero_mean_tone_gains", options_.matching.parameter_config.zero_mean_tone_gains},
             {"seed", options_.matching_execution.seed},
+            {"colorless_init_seed",
+             options_.input.matching_only
+                 ? nlohmann::json(nullptr)
+                 : nlohmann::json(options_.initialization.init_seed.value_or(options_.colorless_execution.seed))},
             {"gradient_method", GradientMethodName(options_.matching_execution.gradient_method)},
             {"gradient_threads", options_.matching_execution.gradient_threads},
             {"optimizer_threads", options_.matching_execution.optimizer_threads},

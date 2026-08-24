@@ -1,5 +1,6 @@
 #include "model.h"
 
+#include "parameter_layout.h"
 #include "vector_pool.h"
 
 #include <armadillo>
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <utility>
 
 namespace
@@ -477,10 +479,9 @@ namespace fdn_optimization
 {
 void ValidateAttenuationFilterConfiguration(const sfFDN::FDNConfig& config)
 {
-    const bool has_legacy_attenuation =
-        std::ranges::any_of(config.loop_filter_configs, [](const auto& processor) {
-            return std::holds_alternative<sfFDN::AttenuationFilterBankOptions>(processor);
-        });
+    const bool has_legacy_attenuation = std::ranges::any_of(config.loop_filter_configs, [](const auto& processor) {
+        return std::holds_alternative<sfFDN::AttenuationFilterBankOptions>(processor);
+    });
     if (has_legacy_attenuation)
     {
         throw std::invalid_argument(
@@ -583,40 +584,12 @@ void FDNModel::SetLossFunctions(const std::vector<std::shared_ptr<AudioLoss>>& l
 
 uint32_t FDNModel::GetParamCount() const
 {
-    uint32_t count = 0;
-    const uint32_t fdn_order = initial_config_.fdn_size;
-    for (const auto& type : param_types_)
+    const auto parameter_count = BuildParameterLayout(initial_config_.fdn_size, param_types_).total_size;
+    if (parameter_count > std::numeric_limits<uint32_t>::max())
     {
-        switch (type)
-        {
-        case OptimizationParamType::Gains:
-            count += 2 * fdn_order;
-            break;
-        case OptimizationParamType::Matrix:
-            count += fdn_order * fdn_order;
-            break;
-        case OptimizationParamType::Matrix_Householder:
-            [[fallthrough]];
-        case OptimizationParamType::Matrix_Circulant:
-            count += fdn_order;
-            break;
-        case OptimizationParamType::AttenuationFilters:
-            count += kNBands;
-            break;
-        case OptimizationParamType::AttenuationFilters_3Band:
-            count += 3 * fdn_order; // 3 for the bands
-            break;
-        case OptimizationParamType::TonecorrectionFilters:
-            count += kNBands;
-            break;
-        case OptimizationParamType::OverallGain:
-            count += 1;
-            break;
-        default:
-            throw std::runtime_error("Unknown ParamType in GetParamCount");
-        }
+        throw std::overflow_error("Optimizer parameter count exceeds uint32_t.");
     }
-    return count;
+    return static_cast<uint32_t>(parameter_count);
 }
 
 void FDNModel::SetT60Estimates(std::span<const float> t60_estimates)
@@ -665,25 +638,33 @@ std::vector<float> FDNModel::GenerateIR(const arma::mat& params) const
 
 double FDNModel::Evaluate(const arma::mat& params) const
 {
+    return EvaluateDetailed(params).total;
+}
+
+ObjectiveEvaluation FDNModel::EvaluateDetailed(const arma::mat& params, bool publish_components) const
+{
     ++(*evaluation_count_);
     std::vector<float> ir = GenerateIR(params);
 
-    double total_loss = 0.0;
-    std::vector<double> last_losses;
+    ObjectiveEvaluation evaluation;
+    evaluation.components.reserve(loss_functions_.size());
     for (const auto& loss_function : loss_functions_)
     {
-        double loss = loss_function->ComputeLoss(ir);
+        const double loss = loss_function->ComputeLoss(ir);
         assert(!std::isnan(loss));
         assert(!std::isinf(loss));
-        last_losses.push_back(loss);
-        total_loss += loss;
+        evaluation.components.push_back(loss);
+        evaluation.total += loss;
     }
 
     VectorPool::Instance().ReturnVector(std::move(ir));
 
-    LossRegistry::Instance().RegisterLoss(last_losses);
+    if (publish_components)
+    {
+        LossRegistry::Instance().RegisterLoss(evaluation.components);
+    }
 
-    return total_loss;
+    return evaluation;
 }
 
 double FDNModel::Evaluate(const arma::mat& params, const size_t i, const size_t batch_size) const

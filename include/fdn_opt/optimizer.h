@@ -7,6 +7,7 @@
 
 #include "audio_loss.h"
 #include "optim_types.h"
+#include "parameter_layout.h"
 
 #include <atomic>
 #include <chrono>
@@ -14,8 +15,10 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <variant>
+#include <vector>
 
 namespace fdn_optimization
 {
@@ -72,6 +75,7 @@ struct GradientDescentParameters
     double min_gain = 1e-2;
 
     double gradient_delta = 1e-1;
+    double max_step_norm = 0.0;
 };
 
 struct SPSAParameters
@@ -82,6 +86,144 @@ struct SPSAParameters
     double evaluationStepSize = 1.132721870064672;
     size_t max_iterations = 1000000;
     double tolerance = 1e-5;
+};
+
+// Selects how BlockSPSA estimates and applies block gradients.
+enum class BlockSPSAMode : uint8_t
+{
+    // Estimate every block at one base point, then apply one full update.
+    SnapshotSweepAll,
+    // Estimate and update one selected block per iteration.
+    RandomOne,
+};
+
+constexpr const char* BlockSPSAModeToString(BlockSPSAMode mode)
+{
+    return mode == BlockSPSAMode::RandomOne ? "random-one" : "snapshot";
+}
+
+// Selects how optimizer coordinates are partitioned into blocks.
+enum class ParameterBlockStrategy : uint8_t
+{
+    // Use parameter-aware groups such as gains, matrices, channels, and bands.
+    Semantic,
+    // Partition the flat coordinate vector into fixed-size contiguous chunks.
+    FixedContiguous,
+};
+
+constexpr const char* ParameterBlockStrategyToString(ParameterBlockStrategy strategy)
+{
+    return strategy == ParameterBlockStrategy::FixedContiguous ? "fixed" : "semantic";
+}
+
+// Selects how RandomOne mode chooses its next block.
+enum class RandomBlockSchedule : uint8_t
+{
+    // Visit every block once in a seeded random order before reshuffling.
+    ShuffledSweep,
+    // Sample every block independently with uniform probability.
+    IndependentUniform,
+};
+
+constexpr const char* RandomBlockScheduleToString(RandomBlockSchedule schedule)
+{
+    return schedule == RandomBlockSchedule::IndependentUniform ? "uniform" : "shuffled";
+}
+
+// Selects how the per-coordinate probe amplitude is scaled by block dimension.
+enum class ProbeRadiusNormalization : uint8_t
+{
+    // Use the same coordinate amplitude in every block.
+    None,
+    // Divide the coordinate amplitude by sqrt(block size) so every block sweeps the same
+    // Euclidean radius. This is a dimension diagnostic, not a theoretically optimal scaling.
+    SqrtDimension,
+};
+
+constexpr const char* ProbeRadiusNormalizationToString(ProbeRadiusNormalization normalization)
+{
+    return normalization == ProbeRadiusNormalization::SqrtDimension ? "sqrt-dim" : "none";
+}
+
+// Identifies a semantic class of parameter blocks that can share gain scales.
+enum class BlockScaleClass : uint8_t
+{
+    Default,
+    GainsInput,
+    GainsOutput,
+    Matrix,
+    Attenuation,
+    Tone,
+    OverallGain,
+};
+
+constexpr const char* BlockScaleClassToString(BlockScaleClass scale_class)
+{
+    switch (scale_class)
+    {
+    case BlockScaleClass::GainsInput:
+        return "gains_in";
+    case BlockScaleClass::GainsOutput:
+        return "gains_out";
+    case BlockScaleClass::Matrix:
+        return "matrix";
+    case BlockScaleClass::Attenuation:
+        return "attenuation";
+    case BlockScaleClass::Tone:
+        return "tone";
+    case BlockScaleClass::OverallGain:
+        return "overall_gain";
+    case BlockScaleClass::Default:
+    default:
+        return "default";
+    }
+}
+
+// Multiplicative learning-rate and perturbation scales applied to one block class.
+struct BlockGainScale
+{
+    BlockScaleClass scale_class = BlockScaleClass::Default;
+    double a_scale = 1.0;
+    double c_scale = 1.0;
+};
+
+// Parameters for the project-local block-coordinate SPSA optimizer.
+struct BlockSPSAParameters
+{
+    BlockSPSAMode mode = BlockSPSAMode::SnapshotSweepAll;
+    ParameterBlockStrategy block_strategy = ParameterBlockStrategy::Semantic;
+    RandomBlockSchedule random_schedule = RandomBlockSchedule::ShuffledSweep;
+    ThreeBandBlockGrouping three_band_grouping = ThreeBandBlockGrouping::ChannelTriplets;
+    ProbeRadiusNormalization probe_radius_normalization = ProbeRadiusNormalization::None;
+
+    size_t contiguous_block_size = 8;
+    size_t directions_per_block = 1;
+
+    double alpha = 0.52;
+    double gamma = 0.26;
+    double step_size = 16.0;
+    double evaluation_step_size = 0.42;
+    std::optional<double> stability_constant;
+    size_t max_iterations = 100000;
+    double tolerance = 1e-5;
+
+    // Number of evaluated accepted points over which the best loss must improve by more than
+    // `tolerance` (relative) before the run is declared converged. Zero disables early stopping.
+    // An unset value derives the window from the block count.
+    std::optional<size_t> stall_window;
+
+    // Evaluates the accepted point every N updates instead of every update. Values above one
+    // amortize the bookkeeping evaluation that the gradient estimator does not use.
+    size_t accepted_evaluation_interval = 1;
+
+    // Caps the Euclidean norm of one coordinate update. Zero disables the cap. Heterogeneous blocks
+    // can produce gradients that differ by two orders of magnitude, so an uncapped step can leave the
+    // valid parameter region in a single update. Defaults on: the cap is within noise on colorless
+    // and prevents divergence on RIR matching, where the tone and overall-gain blocks dominate.
+    double max_step_norm = 1.0;
+
+    // Multiplicative per-class gain scales. Later entries override earlier ones for the same class.
+    std::vector<BlockGainScale> block_scales;
 };
 
 struct SimulatedAnnealingParameters
@@ -142,6 +284,7 @@ struct CMAESParameters
 enum class OptimizationAlgoType : uint8_t
 {
     SPSA,
+    BlockSPSA,
     SimulatedAnnealing,
     DifferentialEvolution,
     PSO,
@@ -163,6 +306,8 @@ constexpr const char* OptimizationAlgoTypeToString(OptimizationAlgoType type)
         return "Adam";
     case OptimizationAlgoType::SPSA:
         return "SPSA";
+    case OptimizationAlgoType::BlockSPSA:
+        return "BlockSPSA";
     case OptimizationAlgoType::SimulatedAnnealing:
         return "Simulated Annealing";
     case OptimizationAlgoType::CNE:
@@ -187,7 +332,7 @@ constexpr const char* OptimizationAlgoTypeToString(OptimizationAlgoType type)
 using OptimizationAlgoParams =
     std::variant<AdamParameters, SPSAParameters, SimulatedAnnealingParameters, DifferentialEvolutionParameters,
                  PSOParameters, RandomSearchParameters, L_BFGSParameters, GradientDescentParameters, CMAESParameters,
-                 CNEParameters>;
+                 CNEParameters, BlockSPSAParameters>;
 
 struct OptimizationInfo
 {
@@ -211,6 +356,22 @@ struct OptimizationInfo
     MatchingParameterConfig matching_parameters;
 };
 
+// Mirrors BlockSPSAProbe for optimizer-agnostic trajectory reporting.
+struct BlockSPSAProbeInfo
+{
+    size_t block = 0;
+    size_t block_size = 0;
+    size_t visit = 0;
+    double learning_rate = 0.0;
+    double perturbation = 0.0;
+    double probe_plus = 0.0;
+    double probe_minus = 0.0;
+    double paired_difference = 0.0;
+    double absolute_paired_difference = 0.0;
+    double gradient_norm = 0.0;
+    double step_norm = 0.0;
+};
+
 struct OptimizationStepInfo
 {
     size_t step = 0;
@@ -221,6 +382,14 @@ struct OptimizationStepInfo
     double gradient_norm = 0.0;
     uint64_t objective_evaluations = 0;
     std::chrono::duration<double> elapsed_time;
+    std::optional<size_t> active_block;
+    std::optional<size_t> block_visit;
+    std::optional<double> perturbation;
+    std::optional<size_t> directions_averaged;
+    std::optional<bool> evaluated;
+    std::optional<bool> improved_best;
+    std::optional<double> step_norm;
+    std::vector<BlockSPSAProbeInfo> block_probes;
 };
 
 struct OptimizationProgressInfo
@@ -249,6 +418,9 @@ struct OptimizationResult
     std::vector<OptimizationStepInfo> trajectory;
     double best_loss = 0.0;
     std::string termination_reason;
+    std::optional<size_t> parameter_block_count;
+    std::optional<double> optimizer_stability_constant;
+    std::optional<size_t> optimizer_stall_window;
 };
 
 class OptimCallback;

@@ -1,0 +1,137 @@
+# Colorless-only configuration
+#
+# Provenance: research-defined NSGA-II studies, colorless N=8, thesis init, 4 threads,
+# 30 trials x 4 tune cases; accepted only after 12 disjoint held-out validate cases.
+# RandomSearch is an untuned trivial baseline. See Tuning-Plan.md and tuning-campaign/report-colorless.md.
+
+ir = "../rirs/py_rirs/rir_concert_hall.wav"
+early_fir_path = "../rirs/py_rirs/early_reflections_filter/early_concert_hall.wav"
+num_channels = 8
+spectral_flatness_weight = 1
+sparsity_weight = 0.5
+power_envelope_weight = 0
+edc_weight = 0.1
+mel_edr_weight = 1
+weighted_edr_weight = 0
+randomize_initial_params = false
+random_delays = false
+save_output = true
+verbose = true
+
+[L-BFGS]
+# Tuned: research-defined search space, colorless N=8, thesis init, 4 threads.
+# Held-out median 0.046892 vs incumbent 0.051806 (9.5% better): ACCEPTED.
+num_basis = 28
+max_iterations = 155
+wolfe = 0.981183364797702
+max_line_search = 50
+gradient_delta = 0.00032242935935624875
+min_gradient_norm = 1e-6
+factor = 1e-15
+min_step = 1e-20
+max_step = 1e20
+
+[Adam]
+# Research-defined tuned candidate rejected by the held-out 5% gate.
+# Candidate 0.037996 vs incumbent 0.037410 (-1.6% improvement).
+# Retaining shipped incumbent.
+step_size = 0.442
+beta1 = 0.9
+beta2 = 0.851
+tolerance = 1e-5
+gradient_delta = 1e-2
+
+[SPSA]
+# Tuned: research-defined search space, colorless N=8, thesis init, 4 threads.
+# Held-out median 0.043462 vs incumbent 0.065802 (34.0% better): ACCEPTED.
+step_size = 1.1727627377482301
+evaluation_step_size = 0.05949918350903441
+alpha = 0.22755572069225438
+gamma = 0.07784861135731835
+max_iterations = 200578
+tolerance = 1e-8
+
+[BlockSPSA]
+# Tuned: research-defined search space, colorless N=8, thesis init, 4 threads.
+# Held-out median 0.041372 vs incumbent 0.048993 (15.6% better): ACCEPTED.
+step_size = 51.36856103655465
+evaluation_step_size = 0.1274603915360556
+stability_constant = 15.55350824284848
+alpha = 0.44541503073811406
+gamma = 0.26535782766381644
+directions_per_block = 4
+mode = "snapshot"
+block_strategy = "semantic"
+random_schedule = "shuffled"
+probe_radius_normalization = "none"
+accepted_eval_interval = 1
+max_step_norm = 1.0
+tolerance = 1e-5
+
+[SimulatedAnnealing]
+# Tuned: research-defined search space, colorless N=8, thesis init, 4 threads.
+# Held-out median 0.046764 vs incumbent 0.054726 (14.5% better): ACCEPTED.
+initial_temperature = 0.36035107704955066
+init_moves = 454
+move_ctrl_sweep = 17
+max_tolerance_sweep = 6
+max_move_coeff = 46.245108465477124
+init_move_coeff = 2.3170323742191057
+gain = 0.7188287156432291
+max_iterations = 1000000
+tolerance = 1e-15
+
+[CNE]
+# Research-defined tuned candidate rejected by the held-out 5% gate.
+# Candidate 0.069530 vs incumbent 0.070673 (1.6% improvement).
+# Retaining shipped incumbent.
+population_size = 5200
+max_generations = 7470
+mutation_probability = 0.737
+mutation_size = 0.171
+select_percent = 0.72
+tolerance = 1e-5
+
+[DifferentialEvolution]
+# Tuned: research-defined search space, colorless N=8, thesis init, 4 threads.
+# Held-out median 0.058079 vs incumbent 0.066494 (12.7% better): ACCEPTED.
+population_size = 491
+max_generations = 4256
+crossover_rate = 0.7847035452441409
+differential_weight = 0.5012929168816291
+tolerance = 0.0003786985872223152
+
+[PSO]
+# Tuned: research-defined search space, colorless N=8, thesis init, 4 threads.
+# Held-out median 0.042393 vs incumbent 0.049140 (13.7% better): ACCEPTED.
+num_particles = 88
+max_iterations = 4951
+tolerance = 7.355700350218312e-05
+horizon_size = 2130
+exploitation_factor = 1.9157717549374635
+exploration_factor = 2.2087542742713775
+
+[GradientDescent]
+# Tuned: research-defined search space, colorless N=8, thesis init, 4 threads.
+# Held-out median 0.042894 vs incumbent 0.053873 (20.4% better): ACCEPTED.
+step_size = 5.23434635797284
+kappa = 0.7132578918476734
+phi = 0.08375222229660942
+momentum = 0.3078781982633325
+min_gain = 2.316819665320155e-06
+gradient_delta = 0.007608971111929962
+tolerance = 1e-5
+max_iterations = 100000000
+
+[CMAES]
+# Research-defined tuned candidate rejected by the held-out 5% gate.
+# Candidate 0.042378 vs incumbent 0.044342 (4.4% improvement).
+# Retaining shipped incumbent.
+population_size = 10
+max_iterations = 1000000000
+tolerance = 1e-4
+step_size = 0.108
+
+[RandomSearch]
+# Untuned trivial baseline; time_limit is the comparison horizon, not a tuning parameter.
+time_limit = 10.0

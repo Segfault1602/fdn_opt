@@ -3,7 +3,10 @@ target_sources(
   fdn_optimization
   PRIVATE optimizer.cpp
           optimizer_internal.h
+          block_spsa_optimizer.cpp
           model.cpp
+          initialization.cpp
+          parameter_layout.cpp
           audio_loss.cpp
           random_searcher.cpp
           vector_pool.h
@@ -15,7 +18,10 @@ target_sources(
          ./../include/fdn_opt
          FILES
          ./../include/fdn_opt/optimizer.h
+         ./../include/fdn_opt/block_spsa_optimizer.h
          ./../include/fdn_opt/model.h
+         ./../include/fdn_opt/initialization.h
+         ./../include/fdn_opt/parameter_layout.h
          ./../include/fdn_opt/audio_loss.h
          ./../include/fdn_opt/optim_types.h)
 

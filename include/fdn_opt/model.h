@@ -21,6 +21,13 @@ namespace fdn_optimization
 void ValidateAttenuationFilterConfiguration(const sfFDN::FDNConfig& config);
 void ValidateFDNConfigurationForOptimization(const sfFDN::FDNConfig& config);
 
+// Contains one objective total and its individual loss components.
+struct ObjectiveEvaluation
+{
+    double total = 0.0;
+    std::vector<double> components;
+};
+
 class LossRegistry
 {
   public:
@@ -92,6 +99,7 @@ class FDNModel
 
     double Evaluate(const arma::mat& params) const;
     double Evaluate(const arma::mat& params, const size_t i, const size_t batch_size) const;
+    ObjectiveEvaluation EvaluateDetailed(const arma::mat& params, bool publish_components = true) const;
 
     double EvaluateWithGradient(const arma::mat& x, arma::mat& g);
     double EvaluateWithGradient(const arma::mat& x, const size_t i, arma::mat& g, const size_t batchSize);
