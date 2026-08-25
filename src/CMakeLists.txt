@@ -9,6 +9,7 @@ target_sources(
           parameter_layout.cpp
           audio_loss.cpp
           random_searcher.cpp
+          tuned_defaults.cpp
           vector_pool.h
   PUBLIC FILE_SET
          "fdn_optimization_headers"
@@ -23,7 +24,8 @@ target_sources(
          ./../include/fdn_opt/initialization.h
          ./../include/fdn_opt/parameter_layout.h
          ./../include/fdn_opt/audio_loss.h
-         ./../include/fdn_opt/optim_types.h)
+         ./../include/fdn_opt/optim_types.h
+         ./../include/fdn_opt/tuned_defaults.h)
 
 target_link_libraries(
   fdn_optimization
