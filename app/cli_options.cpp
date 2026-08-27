@@ -40,6 +40,12 @@ const std::map<std::string, fdn_optimization::MatchingInitialization> kMatchingI
     {"target", fdn_optimization::MatchingInitialization::TargetDerived},
 };
 
+const std::map<std::string, fdn_opt_app::MatrixParameterization> kMatrixParameterizations = {
+    {"random_orthogonal", fdn_opt_app::MatrixParameterization::RandomOrthogonal},
+    {"householder", fdn_opt_app::MatrixParameterization::Householder},
+    {"circulant", fdn_opt_app::MatrixParameterization::Circulant},
+};
+
 void RegisterInputOptions(CLI::App& app, fdn_opt_app::RawCliOptions& options)
 {
     auto* group = app.add_option_group("Input and stages", "Input files and optimization stage selection");
@@ -167,6 +173,13 @@ void RegisterInitializationOptions(CLI::App& app, fdn_opt_app::RawCliOptions& op
                     "Randomize initial FDN configuration instead of using Householder matrix");
     group->add_flag("--random_delays", options.initialization.random_delays,
                     "Use random delay lengths instead of predefined sets");
+    group
+        ->add_option("--matrix_parameterization", options.initialization.matrix_parameterization,
+                     "Feedback-matrix parameterization for the colorless stage: 'random_orthogonal' "
+                     "optimizes all N^2 coefficients and re-orthogonalizes them (default), "
+                     "'householder' and 'circulant' optimize an N-element generator vector and "
+                     "constrain the matrix to that structure")
+        ->transform(CLI::CheckedTransformer(kMatrixParameterizations));
     group->add_option("--init_seed", options.initialization.init_seed,
                       "Seed for the initial FDN configuration; defaults to --seed. Set it separately to hold the "
                       "problem instance fixed while varying optimizer stochasticity");
@@ -425,6 +438,20 @@ std::string_view GradientMethodName(fdn_optimization::GradientMethod method)
 std::string_view MatchingFilterTypeName(MatchingFilterType type)
 {
     return type == MatchingFilterType::ThreeBand ? "3band" : "10band";
+}
+
+std::string_view MatrixParameterizationName(MatrixParameterization parameterization)
+{
+    switch (parameterization)
+    {
+    case MatrixParameterization::Householder:
+        return "householder";
+    case MatrixParameterization::Circulant:
+        return "circulant";
+    case MatrixParameterization::RandomOrthogonal:
+        break;
+    }
+    return "random_orthogonal";
 }
 
 std::string_view EarlyFirModeName(fdn_optimization::EarlyFirMode mode)

@@ -21,7 +21,9 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                        const sfFDN::FDNConfig& initial_fdn_config,
                                                        const fdn_optimization::OptimizationAlgoParams& optimizer_params,
                                                        const std::tuple<double, double, double>& loss_weights,
-                                                       const ExecutionOptions& execution_options, bool verbose);
+                                                       const ExecutionOptions& execution_options, bool verbose,
+                                                       MatrixParameterization matrix_parameterization =
+                                                           MatrixParameterization::RandomOrthogonal);
 
 fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, const sfFDN::FDNConfig& initial_fdn_config,
                                                       const fdn_optimization::OptimizationAlgoParams& optimizer_params,

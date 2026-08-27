@@ -180,7 +180,8 @@ std::expected<fdn_optimization::OptimizationResult, std::string> OptimizationApp
                                  std::make_tuple(options_.losses.spectral_flatness_weight,
                                                  options_.losses.sparsity_weight,
                                                  options_.losses.power_envelope_weight),
-                                 options_.colorless_execution, options_.verbose);
+                                 options_.colorless_execution, options_.verbose,
+                                 options_.initialization.matrix_parameterization);
     }
     catch (const std::exception& error)
     {
@@ -203,6 +204,10 @@ bool OptimizationApplication::WriteColorlessOutputs(const fdn_optimization::Opti
     }
     if (options_.save_output)
     {
+        // Re-save the initial artifacts from the configuration the optimizer actually started from.
+        // With a structured parameterization (Householder, circulant) that starting point need not be
+        // the configuration built before the stage, and the reported `initial_loss` describes this one.
+        SaveInitialArtifacts(result.initial_fdn_config);
         WriteConfigToFile(result.optimized_fdn_config, output_directory_ / "colorless_fdn_config.txt", logger_);
         WriteInfoToFile(result, options_.optimizer_params, output_directory_ / "colorless_fdn_info.txt", logger_);
         SaveImpulseResponse(result.optimized_fdn_config, kSampleRate * 3.f, output_directory_ / "colorless_ir.wav",
@@ -357,6 +362,8 @@ nlohmann::json OptimizationApplication::BuildColorlessMetadata() const
             {"ir_samples", kSampleRate},
             {"seed", options_.colorless_execution.seed},
             {"init_seed", options_.initialization.init_seed.value_or(options_.colorless_execution.seed)},
+            {"matrix_parameterization",
+             MatrixParameterizationName(options_.initialization.matrix_parameterization)},
             {"gradient_method", GradientMethodName(options_.colorless_execution.gradient_method)},
             {"gradient_threads", options_.colorless_execution.gradient_threads},
             {"optimizer_threads", options_.colorless_execution.optimizer_threads},

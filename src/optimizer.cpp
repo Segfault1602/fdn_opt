@@ -921,6 +921,8 @@ void FDNOptimizer::ThreadProc(std::stop_token stop_token, OptimizationInfo info)
         optimization_result_.loss_history = optim_callback_->GetLossHistory();
         optimization_result_.best_loss = final_loss;
         optimization_result_.final_losses = final_evaluation.components;
+        optimization_result_.initial_loss = initial_loss;
+        optimization_result_.initial_losses = initial_evaluation.components;
         optimization_result_.trajectory = optim_callback_->GetTrajectory();
         optimization_result_.termination_reason = optim_callback_->TerminationReason();
         if (visitor.block_spsa_result)

@@ -163,6 +163,10 @@ inline nlohmann::json OptimizationResultToJson(const fdn_optimization::Optimizat
     for (size_t i = 0; i < result.loss_names.size() && i < result.final_losses.size(); ++i)
         loss_components[result.loss_names[i]] = result.final_losses[i];
 
+    nlohmann::json initial_loss_components = nlohmann::json::object();
+    for (size_t i = 0; i < result.loss_names.size() && i < result.initial_losses.size(); ++i)
+        initial_loss_components[result.loss_names[i]] = result.initial_losses[i];
+
     const auto& config = result.optimized_fdn_config;
     arma::fvec input_gains(config.input_block_config.parallel_gains_config.gains);
     arma::fvec output_gains(config.output_block_config.parallel_gains_config.gains);
@@ -196,8 +200,11 @@ inline nlohmann::json OptimizationResultToJson(const fdn_optimization::Optimizat
         {"effective_gradient_threads", result.gradient_threads},
         {"effective_optimizer_threads", result.optimizer_threads},
         {"termination_reason", result.termination_reason},
+        {"initial_loss", result.initial_loss},
+        {"initial_loss_components", initial_loss_components},
         {"final_loss", result.best_loss},
         {"loss_components", loss_components},
+        {"initial_fdn_config", result.initial_fdn_config},
         {"optimized_fdn_config", result.optimized_fdn_config},
         {"validity",
          {{"input_gain_norm", arma::norm(input_gains, 2)},

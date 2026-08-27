@@ -415,6 +415,10 @@ struct OptimizationResult
     std::vector<std::vector<double>> loss_history;
     std::vector<std::string> loss_names;
     std::vector<double> final_losses;
+    // Objective at the starting point, i.e. the loss of `initial_fdn_config`. Reported so callers can
+    // quote a "before" figure without re-implementing the loss functions themselves.
+    double initial_loss = 0.0;
+    std::vector<double> initial_losses;
     std::vector<OptimizationStepInfo> trajectory;
     double best_loss = 0.0;
     std::string termination_reason;

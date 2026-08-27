@@ -146,11 +146,21 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
                                                        const sfFDN::FDNConfig& initial_fdn_config,
                                                        const fdn_optimization::OptimizationAlgoParams& optimizer_params,
                                                        const std::tuple<double, double, double>& loss_weights,
-                                                       const ExecutionOptions& execution_options, bool verbose)
+                                                       const ExecutionOptions& execution_options, bool verbose,
+                                                       MatrixParameterization matrix_parameterization)
 {
 
-    std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::Gains,
-                                      fdn_optimization::OptimizationParamType::Matrix};
+    auto matrix_param_type = fdn_optimization::OptimizationParamType::Matrix;
+    if (matrix_parameterization == MatrixParameterization::Householder)
+    {
+        matrix_param_type = fdn_optimization::OptimizationParamType::Matrix_Householder;
+    }
+    else if (matrix_parameterization == MatrixParameterization::Circulant)
+    {
+        matrix_param_type = fdn_optimization::OptimizationParamType::Matrix_Circulant;
+    }
+
+    std::vector params_to_optimize = {fdn_optimization::OptimizationParamType::Gains, matrix_param_type};
 
     std::vector<std::shared_ptr<fdn_optimization::AudioLoss>> loss_functions;
 
@@ -203,43 +213,6 @@ fdn_optimization::OptimizationResult OptimizeColorless(quill::Logger* logger,
     return result;
 }
 
-std::vector<float> EstimateMatchingT60s(const std::vector<float>& target_rir, MatchingFilterType filter_type)
-{
-    auto decay_curves = audio_utils::analysis::EnergyDecayCurve_FilterBank(target_rir, true, kSampleRate);
-    std::vector<float> time(target_rir.size());
-    for (size_t index = 0; index < time.size(); ++index)
-    {
-        time[index] = static_cast<float>(index) / static_cast<float>(kSampleRate);
-    }
-
-    std::array<float, audio_utils::analysis::kNumOctaveBands> estimates{};
-    for (size_t band = 0; band < decay_curves.size(); ++band)
-    {
-        const auto result = audio_utils::analysis::EstimateT60(
-            decay_curves[band], time, {.decay_start_db = -5.0f, .decay_end_db = -25.0f, .use_linear_regression = true});
-        estimates[band] = result.t60 > 0.0f && std::isfinite(result.t60) ? result.t60 : 1.0f;
-    }
-
-    if (filter_type == MatchingFilterType::TenBand)
-    {
-        std::vector<float> result;
-        result.reserve(10);
-        result.push_back(estimates.front());
-        result.insert(result.end(), estimates.begin(), estimates.end());
-        return result;
-    }
-
-    auto mean_range = [&estimates](size_t begin, size_t end) {
-        float sum = 0.0f;
-        for (size_t index = begin; index < end; ++index)
-        {
-            sum += estimates[index];
-        }
-        return sum / static_cast<float>(end - begin);
-    };
-    return {mean_range(0, 4), mean_range(4, 7), mean_range(7, 9)};
-}
-
 fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, const sfFDN::FDNConfig& initial_fdn_config,
                                                       const fdn_optimization::OptimizationAlgoParams& optimizer_params,
                                                       const std::vector<float>& target_rir,
@@ -256,7 +229,7 @@ fdn_optimization::OptimizationResult OptimizeSpectrum(quill::Logger* logger, con
     std::vector<float> t60_estimates;
     if (matching_options.parameter_config.initialization == fdn_optimization::MatchingInitialization::TargetDerived)
     {
-        t60_estimates = EstimateMatchingT60s(target_rir, matching_options.filter_type);
+        t60_estimates = fdn_optimization::EstimateMatchingT60s(target_rir, attenuation_type, kSampleRate);
     }
 
     fdn_optimization::OptimizationInfo opt_info{.parameters_to_optimize = params_to_optimize,

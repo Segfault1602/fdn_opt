@@ -33,6 +33,17 @@ enum class MatchingFilterType
     ThreeBand,
 };
 
+// Selects how the colorless stage parameterizes the feedback matrix, and therefore which family of
+// matrices the search can reach. `RandomOrthogonal` optimizes every coefficient and re-orthogonalizes
+// via QR, so the reachable set is the orthogonal group; the structured variants optimize a single
+// generator vector of length N.
+enum class MatrixParameterization
+{
+    RandomOrthogonal,
+    Householder,
+    Circulant,
+};
+
 struct MatchingAnalysisOptions
 {
     MatchingFilterType filter_type = MatchingFilterType::TenBand;
@@ -68,6 +79,9 @@ struct InitializationOptions
 {
     bool randomize_initial = false;
     bool random_delays = false;
+    // Feedback-matrix parameterization for the colorless stage. `RandomOrthogonal` reproduces the
+    // historical behaviour, so existing command lines are unaffected.
+    MatrixParameterization matrix_parameterization = MatrixParameterization::RandomOrthogonal;
     // Seeds the initial FDN configuration. Unset reuses the execution seed, which conflates the
     // problem instance with optimizer stochasticity and prevents separating robustness from luck.
     std::optional<uint32_t> init_seed;
@@ -137,6 +151,7 @@ std::expected<ParsedCliOptions, std::string> ValidateAndNormalizeCliOptions(cons
 
 std::string_view GradientMethodName(fdn_optimization::GradientMethod method);
 std::string_view MatchingFilterTypeName(MatchingFilterType type);
+std::string_view MatrixParameterizationName(MatrixParameterization parameterization);
 std::string_view EarlyFirModeName(fdn_optimization::EarlyFirMode mode);
 std::string_view MatchingParameterizationName(fdn_optimization::MatchingParameterization parameterization);
 std::string_view MatchingInitializationName(fdn_optimization::MatchingInitialization initialization);
